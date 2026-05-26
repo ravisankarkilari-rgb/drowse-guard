@@ -1,0 +1,764 @@
+import React, { useState, useEffect } from "react";
+import { supabase } from "../supabase/config";
+import { useNavigate } from "react-router-dom";
+
+const API_URL = process.env.REACT_APP_API_URL || "http://localhost:8000";
+
+export default function Dashboard() {
+  const [user, setUser] = useState(null);
+  const [active, setActive] = useState(false);
+  const [status, setStatus] = useState({ eye_status: "unknown", drowsy: false, alarm: false, closed_frames: 0, frame_count: 0 });
+  const [alerts, setAlerts] = useState([]);
+  const [sensitivity, setSensitivity] = useState(20);
+  const [alarmAudio] = useState(() => {
+    const audio = new Audio("https://actions.google.com/sounds/v1/alarms/alarm_clock.ogg");
+    audio.loop = true;
+    return audio;
+  });
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    supabase.auth.getUser().then(({ data: { user } }) => setUser(user));
+  }, []);
+
+  // Handle playing/pausing the alarm sound
+  useEffect(() => {
+    if (status.alarm) {
+      alarmAudio.play().catch(e => console.log("Audio play blocked by browser:", e));
+    } else {
+      alarmAudio.pause();
+      alarmAudio.currentTime = 0;
+    }
+    return () => alarmAudio.pause();
+  }, [status.alarm, alarmAudio]);
+
+  useEffect(() => {
+    let interval;
+    if (active) {
+      interval = setInterval(() => {
+        fetch(`${API_URL}/status`)
+          .then(res => res.json())
+          .then(data => {
+            setStatus(data);
+            if (data.alarm) {
+              setAlerts(prev => {
+                const newAlert = { time: new Date().toLocaleTimeString(), msg: "Drowsiness Detected!" };
+                return [newAlert, ...prev].slice(0, 10);
+              });
+            }
+          })
+          .catch(err => console.error("API error:", err));
+      }, 1000);
+    } else {
+      setStatus({ eye_status: "unknown", drowsy: false, alarm: false, closed_frames: 0, frame_count: 0 });
+    }
+    return () => clearInterval(interval);
+  }, [active]);
+
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
+    navigate("/");
+  };
+
+  const applySensitivity = () => {
+    fetch(`${API_URL}/config?ear_frames=${sensitivity}`, { method: "PUT" })
+      .then(res => res.json())
+      .catch(err => console.error(err));
+  };
+
+  const getAvatar = () => {
+    if (!user) return "U";
+    if (user.user_metadata?.full_name) return user.user_metadata.full_name.charAt(0).toUpperCase();
+    if (user.email) return user.email.charAt(0).toUpperCase();
+    return "U";
+  };
+
+  return (
+    <div className="dashboard-layout">
+      {/* Sidebar */}
+      <div className="sidebar glass-panel">
+        <div>
+          <div className="logo-container">
+            <span className="logo-icon">👁️</span>
+            <h2 className="logo-text">DrowseGuard</h2>
+          </div>
+          <div className="nav-item active-nav">
+            <span className="nav-icon">📊</span> Dashboard
+          </div>
+          <div className="nav-item">
+            <span className="nav-icon">⚙️</span> Settings
+          </div>
+        </div>
+        <div className="user-section">
+          <div className="user-info">
+            <div className="avatar">{getAvatar()}</div>
+            <div className="user-details">
+              <div className="user-email">{user?.email || "User"}</div>
+              <div className="user-role">Administrator</div>
+            </div>
+          </div>
+          <button onClick={handleLogout} className="logout-btn">Log out</button>
+        </div>
+      </div>
+
+      {/* Main Content */}
+      <div className="main-content">
+        <header className="top-header">
+          <h1 className="page-title">Monitoring Dashboard</h1>
+          <div className="status-badge">
+            <span className={`status-dot ${active ? 'active-dot' : 'inactive-dot'}`}></span>
+            {active ? "System Active" : "System Idle"}
+          </div>
+        </header>
+
+        {/* Status Cards */}
+        <div className="cards-grid">
+          <div className="metric-card eye-card">
+            <div className="card-header">
+              <div className="card-label">Eye Status</div>
+              <div className="card-icon">👁️</div>
+            </div>
+            <div className={`card-value ${status.eye_status === "closed" ? "danger-text" : "success-text"}`}>
+              {status.eye_status.toUpperCase()}
+            </div>
+          </div>
+          
+          <div className="metric-card frames-card">
+            <div className="card-header">
+              <div className="card-label">Closed Frames</div>
+              <div className="card-icon">⏱️</div>
+            </div>
+            <div className="card-value warning-text">{status.closed_frames}</div>
+            <div className="card-subtext">Current consecutive</div>
+          </div>
+          
+          <div className={`metric-card alert-card ${status.alarm ? 'alarm-active' : ''}`}>
+            <div className="card-header">
+              <div className="card-label">Alert Status</div>
+              <div className="card-icon">⚠️</div>
+            </div>
+            <div className={`card-value ${status.alarm ? "danger-text" : "success-text"}`}>
+              {status.alarm ? "ALARM" : "SAFE"}
+            </div>
+            <div className="card-subtext">{status.alarm ? "Wake up driver immediately" : "Driver is alert"}</div>
+          </div>
+          
+          <div className="metric-card total-card">
+            <div className="card-header">
+              <div className="card-label">Total Frames</div>
+              <div className="card-icon">🎞️</div>
+            </div>
+            <div className="card-value info-text">{status.frame_count}</div>
+            <div className="card-subtext">Processed this session</div>
+          </div>
+        </div>
+
+        <div className="content-row">
+          {/* Camera Feed */}
+          <div className="camera-section glass-panel">
+            <div className="camera-header">
+              <div className="camera-title-box">
+                <h3 className="camera-title">Live Camera Feed</h3>
+                {active && <span className="recording-indicator">REC</span>}
+              </div>
+              <button 
+                onClick={() => setActive(!active)} 
+                className={`feed-btn ${active ? "feed-btn-stop" : "feed-btn-start"}`}
+              >
+                {active ? "Stop Feed" : "Start Feed"}
+              </button>
+            </div>
+            
+            {status.alarm && (
+              <div className="alarm-banner">
+                <span className="alarm-icon">🚨</span> 
+                DROWSINESS DETECTED — WAKE UP! 
+                <span className="alarm-icon">🚨</span>
+              </div>
+            )}
+            
+            <div className="video-container">
+              {active ? (
+                <img src={`${API_URL}/stream`} alt="Live Feed" className="video-stream" />
+              ) : (
+                <div className="placeholder">
+                  <div className="placeholder-icon">📷</div>
+                  Camera offline. Click Start Feed to begin monitoring.
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Right Panel */}
+          <div className="right-panel">
+            <div className="panel-card glass-panel">
+              <h4 className="panel-title">Sensitivity Control</h4>
+              <p className="panel-desc">Adjust how many consecutive frames of closed eyes trigger the alarm.</p>
+              
+              <div className="sensitivity-display">
+                <span className="sensitivity-label">Threshold:</span>
+                <span className="sensitivity-value">{sensitivity} frames</span>
+              </div>
+              
+              <input 
+                type="range" min="5" max="60" 
+                value={sensitivity} onChange={e => setSensitivity(Number(e.target.value))}
+                className="slider"
+              />
+              
+              <button onClick={applySensitivity} className="btn-primary" style={{marginTop: '20px'}}>
+                Apply Settings
+              </button>
+            </div>
+
+            <div className="panel-card glass-panel alerts-panel">
+              <div className="panel-header-row">
+                <h4 className="panel-title" style={{margin: 0}}>Recent Alerts</h4>
+                <span className="alert-count">{alerts.length}</span>
+              </div>
+              
+              <div className="alerts-list">
+                {alerts.length === 0 ? (
+                  <div className="empty-alerts">No alerts recorded in this session.</div>
+                ) : (
+                  alerts.map((a, i) => (
+                    <div key={i} className="alert-item">
+                      <div className="alert-indicator"></div>
+                      <div className="alert-content">
+                        <div className="alert-msg">{a.msg}</div>
+                        <div className="alert-time">{a.time}</div>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <style>{`
+        .dashboard-layout {
+          display: flex;
+          min-height: 100vh;
+          background: transparent;
+        }
+        
+        .sidebar {
+          width: 260px;
+          margin: 20px;
+          display: flex;
+          flex-direction: column;
+          justify-content: space-between;
+          padding: 24px 20px;
+          position: sticky;
+          top: 20px;
+          height: calc(100vh - 40px);
+        }
+        
+        .logo-container {
+          display: flex;
+          align-items: center;
+          gap: 12px;
+          margin-bottom: 40px;
+        }
+        
+        .logo-icon {
+          font-size: 24px;
+          background: rgba(99, 102, 241, 0.2);
+          width: 40px;
+          height: 40px;
+          display: flex;
+          justify-content: center;
+          align-items: center;
+          border-radius: 10px;
+          border: 1px solid rgba(99, 102, 241, 0.3);
+        }
+        
+        .logo-text {
+          color: white;
+          margin: 0;
+          font-size: 20px;
+          font-weight: 800;
+          background: linear-gradient(to right, #fff, #a5b4fc);
+          -webkit-background-clip: text;
+          -webkit-text-fill-color: transparent;
+        }
+        
+        .nav-item {
+          color: var(--text-muted);
+          padding: 14px 16px;
+          border-radius: 12px;
+          font-weight: 600;
+          font-size: 15px;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          gap: 12px;
+          transition: all 0.3s ease;
+          margin-bottom: 8px;
+        }
+        
+        .nav-item:hover {
+          background: rgba(255, 255, 255, 0.05);
+          color: white;
+        }
+        
+        .active-nav {
+          background: linear-gradient(90deg, rgba(99,102,241,0.2) 0%, rgba(99,102,241,0.05) 100%);
+          color: white;
+          border-left: 3px solid var(--primary);
+        }
+        
+        .user-section {
+          background: rgba(0, 0, 0, 0.2);
+          border-radius: 14px;
+          padding: 16px;
+          border: 1px solid var(--glass-border);
+        }
+        
+        .user-info {
+          display: flex;
+          align-items: center;
+          gap: 12px;
+          margin-bottom: 16px;
+        }
+        
+        .avatar {
+          width: 40px;
+          height: 40px;
+          border-radius: 10px;
+          background: linear-gradient(135deg, var(--primary), var(--primary-hover));
+          display: flex;
+          justify-content: center;
+          align-items: center;
+          color: white;
+          font-weight: bold;
+          font-size: 16px;
+          box-shadow: 0 4px 10px rgba(99, 102, 241, 0.3);
+        }
+        
+        .user-details {
+          flex: 1;
+          overflow: hidden;
+        }
+        
+        .user-email {
+          color: white;
+          font-size: 14px;
+          font-weight: 600;
+          text-overflow: ellipsis;
+          overflow: hidden;
+          white-space: nowrap;
+        }
+        
+        .user-role {
+          color: var(--text-muted);
+          font-size: 12px;
+        }
+        
+        .logout-btn {
+          width: 100%;
+          background: rgba(239, 68, 68, 0.1);
+          color: #fca5a5;
+          border: 1px solid rgba(239, 68, 68, 0.2);
+          padding: 10px;
+          border-radius: 10px;
+          cursor: pointer;
+          font-size: 14px;
+          font-weight: 600;
+          transition: all 0.3s ease;
+        }
+        
+        .logout-btn:hover {
+          background: rgba(239, 68, 68, 0.2);
+          color: white;
+        }
+        
+        .main-content {
+          flex: 1;
+          padding: 20px 20px 20px 0;
+          display: flex;
+          flex-direction: column;
+          gap: 24px;
+          height: 100vh;
+          overflow-y: auto;
+        }
+        
+        .top-header {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          background: var(--glass-bg);
+          backdrop-filter: blur(12px);
+          padding: 20px 30px;
+          border-radius: 16px;
+          border: 1px solid var(--glass-border);
+        }
+        
+        .page-title {
+          font-size: 24px;
+          font-weight: 800;
+          margin: 0;
+        }
+        
+        .status-badge {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          background: rgba(0, 0, 0, 0.3);
+          padding: 8px 16px;
+          border-radius: 50px;
+          font-size: 13px;
+          font-weight: 600;
+          border: 1px solid var(--glass-border);
+        }
+        
+        .status-dot {
+          width: 8px;
+          height: 8px;
+          border-radius: 50%;
+        }
+        
+        .active-dot {
+          background: var(--accent-success);
+          box-shadow: 0 0 10px var(--accent-success);
+        }
+        
+        .inactive-dot {
+          background: var(--text-muted);
+        }
+        
+        .cards-grid {
+          display: grid;
+          grid-template-columns: repeat(4, 1fr);
+          gap: 20px;
+        }
+        
+        .metric-card {
+          background: var(--glass-bg);
+          backdrop-filter: blur(12px);
+          border-radius: 16px;
+          padding: 24px;
+          border: 1px solid var(--glass-border);
+          position: relative;
+          overflow: hidden;
+          transition: transform 0.3s ease;
+        }
+        
+        .metric-card:hover {
+          transform: translateY(-4px);
+        }
+        
+        .eye-card { border-bottom: 3px solid var(--primary); }
+        .frames-card { border-bottom: 3px solid var(--accent-warning); }
+        .alert-card { border-bottom: 3px solid var(--accent-danger); }
+        .total-card { border-bottom: 3px solid var(--accent-info); }
+        
+        .card-header {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          margin-bottom: 16px;
+        }
+        
+        .card-label {
+          color: var(--text-muted);
+          font-size: 13px;
+          text-transform: uppercase;
+          letter-spacing: 1px;
+          font-weight: 600;
+        }
+        
+        .card-icon {
+          font-size: 20px;
+          background: rgba(255, 255, 255, 0.05);
+          width: 36px;
+          height: 36px;
+          display: flex;
+          justify-content: center;
+          align-items: center;
+          border-radius: 10px;
+        }
+        
+        .card-value {
+          font-size: 32px;
+          font-weight: 800;
+          line-height: 1;
+          margin-bottom: 8px;
+        }
+        
+        .card-subtext {
+          color: var(--text-muted);
+          font-size: 12px;
+        }
+        
+        .success-text { color: var(--accent-success); }
+        .danger-text { color: var(--accent-danger); }
+        .warning-text { color: var(--accent-warning); }
+        .info-text { color: var(--accent-info); }
+        
+        .content-row {
+          display: flex;
+          gap: 24px;
+          min-height: 400px;
+        }
+        
+        .camera-section {
+          flex: 2;
+          display: flex;
+          flex-direction: column;
+          overflow: hidden;
+          padding: 0;
+        }
+        
+        .camera-header {
+          padding: 20px 24px;
+          border-bottom: 1px solid var(--glass-border);
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          background: rgba(0, 0, 0, 0.2);
+        }
+        
+        .camera-title-box {
+          display: flex;
+          align-items: center;
+          gap: 12px;
+        }
+        
+        .camera-title {
+          margin: 0;
+          font-size: 18px;
+          font-weight: 700;
+        }
+        
+        .recording-indicator {
+          background: rgba(239, 68, 68, 0.2);
+          color: #fca5a5;
+          border: 1px solid rgba(239, 68, 68, 0.4);
+          padding: 4px 8px;
+          border-radius: 6px;
+          font-size: 10px;
+          font-weight: bold;
+          letter-spacing: 1px;
+          animation: blink 2s infinite;
+        }
+        
+        .feed-btn {
+          border: none;
+          padding: 10px 20px;
+          border-radius: 10px;
+          font-weight: 700;
+          cursor: pointer;
+          transition: all 0.3s ease;
+          font-size: 14px;
+        }
+        
+        .feed-btn-start {
+          background: var(--accent-success);
+          color: white;
+          box-shadow: 0 4px 15px rgba(16, 185, 129, 0.3);
+        }
+        
+        .feed-btn-stop {
+          background: var(--accent-danger);
+          color: white;
+          box-shadow: 0 4px 15px rgba(239, 68, 68, 0.3);
+        }
+        
+        .alarm-banner {
+          background: linear-gradient(90deg, #991b1b, #ef4444, #991b1b);
+          color: white;
+          font-weight: 800;
+          text-align: center;
+          padding: 12px;
+          letter-spacing: 2px;
+          display: flex;
+          justify-content: center;
+          align-items: center;
+          gap: 10px;
+          text-transform: uppercase;
+        }
+        
+        .video-container {
+          flex: 1;
+          display: flex;
+          justify-content: center;
+          align-items: center;
+          background: #000;
+          position: relative;
+          background-image: 
+            linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
+            linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+          background-size: 30px 30px;
+        }
+        
+        .video-stream {
+          width: 100%;
+          height: 100%;
+          object-fit: contain;
+          display: block;
+        }
+        
+        .placeholder {
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          gap: 16px;
+          color: var(--text-muted);
+          font-size: 15px;
+        }
+        
+        .placeholder-icon {
+          font-size: 48px;
+          opacity: 0.5;
+        }
+        
+        .right-panel {
+          flex: 1;
+          display: flex;
+          flex-direction: column;
+          gap: 24px;
+        }
+        
+        .panel-card {
+          padding: 24px;
+        }
+        
+        .panel-title {
+          margin: 0 0 8px 0;
+          font-size: 18px;
+          font-weight: 700;
+        }
+        
+        .panel-desc {
+          color: var(--text-muted);
+          font-size: 13px;
+          margin-bottom: 20px;
+          line-height: 1.5;
+        }
+        
+        .sensitivity-display {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          background: rgba(0,0,0,0.2);
+          padding: 12px 16px;
+          border-radius: 12px;
+          margin-bottom: 16px;
+          border: 1px solid var(--glass-border);
+        }
+        
+        .sensitivity-label {
+          color: var(--text-muted);
+          font-size: 14px;
+          font-weight: 600;
+        }
+        
+        .sensitivity-value {
+          color: var(--primary);
+          font-weight: 800;
+          font-size: 16px;
+        }
+        
+        .slider {
+          -webkit-appearance: none;
+          width: 100%;
+          height: 6px;
+          border-radius: 5px;
+          background: rgba(255,255,255,0.1);
+          outline: none;
+        }
+        
+        .slider::-webkit-slider-thumb {
+          -webkit-appearance: none;
+          appearance: none;
+          width: 20px;
+          height: 20px;
+          border-radius: 50%;
+          background: var(--primary);
+          cursor: pointer;
+          box-shadow: 0 0 10px var(--glass-glow);
+        }
+        
+        .alerts-panel {
+          flex: 1;
+          display: flex;
+          flex-direction: column;
+        }
+        
+        .panel-header-row {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          margin-bottom: 20px;
+        }
+        
+        .alert-count {
+          background: rgba(239, 68, 68, 0.2);
+          color: #fca5a5;
+          padding: 4px 10px;
+          border-radius: 20px;
+          font-size: 12px;
+          font-weight: bold;
+        }
+        
+        .alerts-list {
+          flex: 1;
+          overflow-y: auto;
+          display: flex;
+          flex-direction: column;
+          gap: 12px;
+        }
+        
+        .empty-alerts {
+          color: var(--text-muted);
+          font-size: 14px;
+          text-align: center;
+          padding: 40px 0;
+          background: rgba(0,0,0,0.1);
+          border-radius: 12px;
+          border: 1px dashed rgba(255,255,255,0.1);
+        }
+        
+        .alert-item {
+          display: flex;
+          gap: 16px;
+          background: rgba(239, 68, 68, 0.05);
+          border: 1px solid rgba(239, 68, 68, 0.1);
+          padding: 16px;
+          border-radius: 12px;
+          transition: transform 0.2s ease;
+        }
+        
+        .alert-item:hover {
+          transform: translateX(4px);
+          background: rgba(239, 68, 68, 0.1);
+        }
+        
+        .alert-indicator {
+          width: 8px;
+          border-radius: 4px;
+          background: var(--accent-danger);
+        }
+        
+        .alert-content {
+          flex: 1;
+        }
+        
+        .alert-msg {
+          color: white;
+          font-weight: 600;
+          font-size: 14px;
+          margin-bottom: 4px;
+        }
+        
+        .alert-time {
+          color: var(--text-muted);
+          font-size: 12px;
+        }
+      `}</style>
+    </div>
+  );
+}

@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="DrowseGuard Web - Advanced real-time Edge AI drowsiness detection prototype using computer vision and facial landmarks to prevent distracted or drowsy driving.">
+  <meta name="author" content="DrowseGuard Team">
+  <title>DrowseGuard Edge AI - Real-time Web Drowsiness Detector</title>
+  
+  <!-- Modern Outfit & Inter Typography from Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&family=Inter:wght@300;400;500;700&display=swap" rel="stylesheet">
+  
+
+
+  <!-- Style Sheet link -->
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  
+  <div id="glow-bg-1" class="glow-sphere"></div>
+  <div id="glow-bg-2" class="glow-sphere"></div>
+
+  <main id="app-container">
+    <!-- Header -->
+    <header id="app-header">
+      <div class="logo-area">
+        <span class="logo-icon">👁️</span>
+        <h1 id="logo-text">DrowseGuard <span class="badge">EDGE AI</span></h1>
+      </div>
+      <div id="status-pill" class="pill pill-offline">SYSTEM OFFLINE</div>
+    </header>
+
+    <!-- Main Grid Dashboard Layout -->
+    <div id="dashboard-grid">
+      
+      <!-- Camera/Vision Stream Section -->
+      <section id="camera-section" class="glass-card">
+        <div class="card-header">
+          <h2>Live Dashcam Feed</h2>
+          <span class="pulse-indicator"></span>
+        </div>
+        
+        <div id="stream-wrapper">
+          <!-- Hidden video stream -->
+          <video id="webcam" autoplay playsinline muted></video>
+          <!-- Display canvas overlaying facial tracking mesh -->
+          <canvas id="canvas-overlay"></canvas>
+          
+          <div id="camera-placeholder">
+            <span class="placeholder-icon">📷</span>
+            <p>Camera is offline. Press "Start Monitoring" below.</p>
+          </div>
+
+          <!-- High-Contrast Alarm Warning Overlay -->
+          <div id="alarm-overlay">
+            <div class="alarm-content">
+              <span class="alarm-icon">⚠️</span>
+              <h2>WAKE UP! DROWSINESS DETECTED!</h2>
+            </div>
+          </div>
+        </div>
+        
+        <div class="camera-controls">
+          <button id="btn-toggle-monitor" class="btn btn-primary-start">Start Monitoring</button>
+        </div>
+      </section>
+
+      <!-- Real-Time Metrics & Control Panel -->
+      <aside id="metrics-panel">
+        
+        <!-- Live Stat Cards -->
+        <div class="metrics-grid">
+          <div class="glass-card metric-card" id="card-eye-status">
+            <span class="card-label">Eye State</span>
+            <span id="txt-eye-status" class="card-val txt-green">UNKNOWN</span>
+          </div>
+          
+          <div class="glass-card metric-card" id="card-ear-val">
+            <span class="card-label">Eye Openness (EAR)</span>
+            <span id="txt-ear-val" class="card-val">0.00</span>
+          </div>
+
+          <div class="glass-card metric-card" id="card-closed-frames">
+            <span class="card-label">Closed Duration</span>
+            <span id="txt-closed-duration" class="card-val">0.0s</span>
+          </div>
+
+          <div class="glass-card metric-card" id="card-safety-rating">
+            <span class="card-label">Total Alert Count</span>
+            <span id="txt-alert-count" class="card-val">0</span>
+          </div>
+        </div>
+
+        <!-- Custom Sensitivity Threshold Controls -->
+        <div class="glass-card controls-card">
+          <h3>Detector Calibration</h3>
+          
+          <div class="control-row">
+            <div class="control-label-wrapper">
+              <label for="range-ear-threshold">EAR Sensitivity Threshold</label>
+              <span id="val-ear-threshold">0.25</span>
+            </div>
+            <input type="range" id="range-ear-threshold" min="0.15" max="0.30" step="0.01" value="0.25">
+            <span class="control-help">Triggers "eye closed" when openness falls below this level.</span>
+          </div>
+
+          <div class="control-row">
+            <div class="control-label-wrapper">
+              <label for="range-closed-time">Trigger Delay (seconds)</label>
+              <span id="val-closed-time">0.8s</span>
+            </div>
+            <input type="range" id="range-closed-time" min="0.8" max="3.0" step="0.1" value="0.8">
+            <span class="control-help">Time eyes must remain closed before the alarm sounds.</span>
+          </div>
+        </div>
+
+        <!-- Real-Time Analytical Graph -->
+        <div class="glass-card chart-card">
+          <div class="chart-header">
+            <h3>Eye Aspect Ratio History</h3>
+            <span class="legend"><span class="legend-dot"></span>EAR Score</span>
+          </div>
+          <div class="chart-container">
+            <canvas id="chart-realtime"></canvas>
+          </div>
+        </div>
+
+      </aside>
+
+    </div>
+  </main>
+
+  <!-- Audio asset loading -->
+  <audio id="audio-alarm" src="alarm.mp3" loop></audio>
+
+  <!-- Application script link (Loaded as an ES Module) -->
+  <script type="module" src="app.js"></script>
+</body>
+</html>

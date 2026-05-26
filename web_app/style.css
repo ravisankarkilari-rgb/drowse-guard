@@ -1,0 +1,502 @@
+/* DrowseGuard Web — Premium Glassmorphism Design System */
+
+:root {
+  --bg-primary: hsl(240, 25%, 5%);
+  --bg-card: rgba(255, 255, 255, 0.03);
+  --border-light: rgba(255, 255, 255, 0.06);
+  --border-glow: rgba(99, 102, 241, 0.15);
+  
+  /* Harmonized HSL Color Palette */
+  --accent-indigo: hsl(239, 84%, 67%);
+  --accent-cyan: hsl(188, 86%, 53%);
+  --color-green: hsl(142, 72%, 50%);
+  --color-orange: hsl(37, 98%, 53%);
+  --color-red: hsl(0, 84%, 60%);
+  
+  --text-primary: hsl(0, 0%, 96%);
+  --text-secondary: hsl(240, 5%, 65%);
+  --text-muted: hsl(240, 4%, 45%);
+}
+
+/* ── Reset & Setup ───────────────────────────── */
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  min-height: 100vh;
+  overflow-x: hidden;
+  position: relative;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+/* ── Ambient Background Lighting ─────────────── */
+.glow-sphere {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(120px);
+  pointer-events: none;
+  z-index: 0;
+}
+
+#glow-bg-1 {
+  width: 500px;
+  height: 500px;
+  top: -100px;
+  right: -50px;
+  background: radial-gradient(circle, hsla(244, 75%, 50%, 0.15) 0%, transparent 70%);
+}
+
+#glow-bg-2 {
+  width: 600px;
+  height: 600px;
+  bottom: -200px;
+  left: -100px;
+  background: radial-gradient(circle, hsla(188, 86%, 53%, 0.08) 0%, transparent 70%);
+}
+
+/* ── Layout & Wrapper ────────────────────────── */
+#app-container {
+  width: 100%;
+  max-width: 1280px;
+  padding: 24px;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+/* ── Header ──────────────────────────────────── */
+#app-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid var(--border-light);
+  padding-bottom: 20px;
+}
+
+.logo-area {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.logo-icon {
+  font-size: 28px;
+}
+
+#logo-text {
+  font-family: 'Outfit', sans-serif;
+  font-size: 24px;
+  font-weight: 800;
+  letter-spacing: -0.5px;
+  background: linear-gradient(135deg, var(--text-primary) 30%, var(--accent-indigo) 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.badge {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--accent-cyan);
+  border: 1px solid rgba(6, 182, 212, 0.3);
+  padding: 2px 8px;
+  border-radius: 20px;
+  vertical-align: middle;
+  margin-left: 6px;
+  letter-spacing: 1px;
+}
+
+.pill {
+  font-size: 12px;
+  font-weight: 700;
+  padding: 6px 14px;
+  border-radius: 30px;
+  letter-spacing: 0.5px;
+  transition: all 0.3s ease;
+}
+
+.pill-offline {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-muted);
+  border: 1px solid var(--border-light);
+}
+
+.pill-online {
+  background: rgba(20, 184, 166, 0.1);
+  color: var(--color-green);
+  border: 1px solid rgba(20, 184, 166, 0.2);
+  box-shadow: 0 0 10px rgba(20, 184, 166, 0.1);
+}
+
+/* ── Glass Cards ─────────────────────────────── */
+.glass-card {
+  background: var(--bg-card);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid var(--border-light);
+  border-radius: 18px;
+  padding: 20px;
+  box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.5);
+  transition: border-color 0.3s ease, box-shadow 0.3s ease;
+}
+
+.glass-card:hover {
+  border-color: var(--border-glow);
+}
+
+/* ── Dashboard Grid ──────────────────────────── */
+#dashboard-grid {
+  display: grid;
+  grid-template-columns: 1.5fr 1fr;
+  gap: 24px;
+}
+
+@media (max-width: 900px) {
+  #dashboard-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ── Camera/Stream Section ───────────────────── */
+#camera-section {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.card-header h2 {
+  font-family: 'Outfit', sans-serif;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.pulse-indicator {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background-color: var(--text-muted);
+}
+
+.pulsing {
+  background-color: var(--color-green);
+  animation: pulse 1.5s infinite;
+}
+
+@keyframes pulse {
+  0% { box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.7); }
+  70% { box-shadow: 0 0 0 8px rgba(34, 197, 94, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(34, 197, 94, 0); }
+}
+
+#stream-wrapper {
+  position: relative;
+  width: 100%;
+  height: 380px;
+  border-radius: 12px;
+  overflow: hidden;
+  background-color: rgba(0, 0, 0, 0.4);
+  border: 1px solid var(--border-light);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+#webcam {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transform: scaleX(-1); /* Mirror camera stream */
+}
+
+#canvas-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 5;
+  transform: scaleX(-1); /* Mirror canvas to align with camera */
+}
+
+#camera-placeholder {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  gap: 12px;
+  color: var(--text-muted);
+  text-align: center;
+  padding: 20px;
+  z-index: 4;
+}
+
+.placeholder-icon {
+  font-size: 48px;
+}
+
+/* ── Flashing Red Alarm Banner ───────────────── */
+#alarm-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 10;
+  display: none; /* Controlled via JS */
+  justify-content: center;
+  align-items: center;
+  animation: alarm-flash 0.8s infinite;
+}
+
+@keyframes alarm-flash {
+  0% { background-color: rgba(239, 68, 68, 0); border: 4px solid transparent; }
+  50% { background-color: rgba(239, 68, 68, 0.45); border: 4px solid var(--color-red); }
+  100% { background-color: rgba(239, 68, 68, 0); border: 4px solid transparent; }
+}
+
+.alarm-content {
+  text-align: center;
+  transform: scale(0.9);
+  animation: zoom-pulse 0.8s infinite ease-in-out;
+}
+
+@keyframes zoom-pulse {
+  0% { transform: scale(0.95); }
+  50% { transform: scale(1.05); }
+  100% { transform: scale(0.95); }
+}
+
+.alarm-icon {
+  font-size: 64px;
+  display: block;
+  margin-bottom: 12px;
+}
+
+.alarm-content h2 {
+  font-family: 'Outfit', sans-serif;
+  font-size: 24px;
+  font-weight: 800;
+  color: #ffffff;
+  text-shadow: 0 0 15px rgba(0, 0, 0, 0.8), 0 0 20px var(--color-red);
+  letter-spacing: 0.5px;
+}
+
+.camera-controls {
+  display: flex;
+  justify-content: center;
+}
+
+.btn {
+  font-family: 'Outfit', sans-serif;
+  font-size: 16px;
+  font-weight: 700;
+  padding: 14px 32px;
+  border-radius: 12px;
+  cursor: pointer;
+  border: none;
+  transition: all 0.3s ease;
+  width: 100%;
+  text-align: center;
+}
+
+.btn-primary-start {
+  background: linear-gradient(135deg, var(--accent-indigo) 0%, hsl(244, 75%, 55%) 100%);
+  color: #fff;
+  box-shadow: 0 4px 15px rgba(99, 102, 241, 0.3);
+}
+
+.btn-primary-start:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(99, 102, 241, 0.45);
+}
+
+.btn-danger-stop {
+  background: linear-gradient(135deg, var(--color-red) 0%, hsl(0, 84%, 50%) 100%);
+  color: #fff;
+  box-shadow: 0 4px 15px rgba(239, 68, 68, 0.3);
+}
+
+.btn-danger-stop:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(239, 68, 68, 0.45);
+}
+
+/* ── Metrics Panel ───────────────────────────── */
+#metrics-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.metrics-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+.metric-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 90px;
+  justify-content: center;
+}
+
+.card-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  letter-spacing: 1px;
+}
+
+.card-val {
+  font-family: 'Outfit', sans-serif;
+  font-size: 26px;
+  font-weight: 800;
+  color: #fff;
+}
+
+.txt-green {
+  color: var(--color-green);
+  text-shadow: 0 0 10px rgba(34, 197, 94, 0.15);
+}
+
+.txt-red {
+  color: var(--color-red);
+  text-shadow: 0 0 10px rgba(239, 68, 68, 0.15);
+}
+
+/* ── Calibration Panel ───────────────────────── */
+.controls-card {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.controls-card h3 {
+  font-family: 'Outfit', sans-serif;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.control-row {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.control-label-wrapper {
+  display: flex;
+  justify-content: space-between;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.control-label-wrapper span {
+  font-family: 'Outfit', sans-serif;
+  font-weight: 700;
+  color: var(--accent-cyan);
+}
+
+input[type="range"] {
+  -webkit-appearance: none;
+  width: 100%;
+  height: 6px;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  outline: none;
+}
+
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--accent-indigo);
+  cursor: pointer;
+  border: 2px solid var(--text-primary);
+  box-shadow: 0 0 10px rgba(99, 102, 241, 0.5);
+  transition: transform 0.15s ease;
+}
+
+input[type="range"]::-webkit-slider-thumb:hover {
+  transform: scale(1.2);
+}
+
+.control-help {
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+/* ── analytical Chart Card ───────────────────── */
+.chart-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  height: 200px;
+  justify-content: space-between;
+}
+
+.chart-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.chart-header h3 {
+  font-family: 'Outfit', sans-serif;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.legend {
+  font-size: 11px;
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.legend-dot {
+  width: 6px;
+  height: 6px;
+  background-color: var(--accent-indigo);
+  border-radius: 50%;
+  box-shadow: 0 0 6px var(--accent-indigo);
+}
+
+.chart-container {
+  position: relative;
+  width: 100%;
+  height: 110px;
+  border-radius: 8px;
+  overflow: hidden;
+  background: rgba(0, 0, 0, 0.15);
+  border: 1px solid rgba(255, 255, 255, 0.03);
+}
+
+#chart-realtime {
+  width: 100%;
+  height: 100%;
+}
