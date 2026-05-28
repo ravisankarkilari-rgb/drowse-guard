@@ -73,15 +73,39 @@ async function initMediaPipe() {
       vision = await FilesetResolver.forVisionTasks(window.location.origin + "/wasm");
     }
     
-    // Load optimized face landmarker task locally
-    faceLandmarker = await FaceLandmarker.createFromOptions(vision, {
-      baseOptions: {
-        modelAssetPath: "./face_landmarker.task",
-        delegate: "GPU"
-      },
-      runningMode: "VIDEO",
-      numFaces: 1
-    });
+    // Load optimized face landmarker task with automatic CPU and CDN fallbacks
+    try {
+      faceLandmarker = await FaceLandmarker.createFromOptions(vision, {
+        baseOptions: {
+          modelAssetPath: "./face_landmarker.task",
+          delegate: "GPU"
+        },
+        runningMode: "VIDEO",
+        numFaces: 1
+      });
+    } catch (gpuError) {
+      console.warn("GPU delegation or local load failed. Retrying with CPU and CDN model fallback...", gpuError);
+      try {
+        faceLandmarker = await FaceLandmarker.createFromOptions(vision, {
+          baseOptions: {
+            modelAssetPath: "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",
+            delegate: "CPU"
+          },
+          runningMode: "VIDEO",
+          numFaces: 1
+        });
+      } catch (cdnCpuError) {
+        console.warn("CDN CPU fallback failed. Trying local task with CPU delegate...", cdnCpuError);
+        faceLandmarker = await FaceLandmarker.createFromOptions(vision, {
+          baseOptions: {
+            modelAssetPath: "./face_landmarker.task",
+            delegate: "CPU"
+          },
+          runningMode: "VIDEO",
+          numFaces: 1
+        });
+      }
+    }
     
     console.log("MediaPipe Model Loaded Successfully!");
     statusPill.innerText = "SYSTEM READY";
@@ -163,13 +187,22 @@ btnToggleMonitor.addEventListener("click", async () => {
 
 async function startMonitoring() {
   try {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      throw new Error("Webcam access is not supported by your browser or requires a secure connection (HTTPS).");
+    }
+
     // Capture user's webcam feed safely
     webcamStream = await navigator.mediaDevices.getUserMedia({
       video: { width: 640, height: 480, facingMode: "user" }
     });
     
     video.srcObject = webcamStream;
-    video.addEventListener("loadedmetadata", onVideoLoaded);
+    
+    if (video.readyState >= 1) {
+      onVideoLoaded();
+    } else {
+      video.addEventListener("loadedmetadata", onVideoLoaded);
+    }
     
     btnToggleMonitor.innerText = "Stop Monitoring";
     btnToggleMonitor.classList.remove("btn-primary-start");
@@ -189,7 +222,7 @@ async function startMonitoring() {
 
   } catch (error) {
     console.error("Webcam access failed:", error);
-    alert("Could not access your camera. Please ensure permissions are granted.");
+    alert(`Could not access your camera: ${error.message || error}\nPlease ensure camera permissions are granted and you are using a secure connection (HTTPS).`);
   }
 }
 
@@ -226,6 +259,7 @@ function stopMonitoring() {
 }
 
 function onVideoLoaded() {
+  video.removeEventListener("loadedmetadata", onVideoLoaded);
   canvasElement.width = video.videoWidth;
   canvasElement.height = video.videoHeight;
   
@@ -238,37 +272,41 @@ async function renderLoop() {
   if (!isMonitoring) return;
 
   // Render webcam stream overlay if frame is ready
-  if (video.currentTime !== lastVideoTime) {
+  if (video.readyState >= 2 && video.currentTime !== lastVideoTime) {
     lastVideoTime = video.currentTime;
     
-    // Clear overlay
-    canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
-    
-    // Run Face Landmark Detection
-    const startTimeMs = Date.now();
-    const results = faceLandmarker.detectForVideo(video, startTimeMs);
-    
-    if (results.faceLandmarks && results.faceLandmarks.length > 0) {
-      const landmarks = results.faceLandmarks[0];
+    try {
+      // Clear overlay
+      canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
       
-      // Calculate EAR for both eyes
-      const ear = calculateAverageEAR(landmarks);
+      // Run Face Landmark Detection
+      const startTimeMs = Date.now();
+      const results = faceLandmarker.detectForVideo(video, startTimeMs);
       
-      // Update values
-      txtEarVal.innerText = ear.toFixed(2);
-      earHistory.push(ear);
-      earHistory.shift(); // keep sliding queue of 100 samples
-      
-      // Draw facial overlay tracking indicators
-      drawTrackingMesh(landmarks, ear);
-      
-      // Drowsiness Detection Logic
-      evaluateDrowsiness(ear);
-    } else {
-      txtEyeStatus.innerText = "NO FACE DETECTED";
-      txtEyeStatus.className = "card-val txt-red";
-      closedStartTime = null;
-      txtClosedDuration.innerText = "0.0s";
+      if (results.faceLandmarks && results.faceLandmarks.length > 0) {
+        const landmarks = results.faceLandmarks[0];
+        
+        // Calculate EAR for both eyes
+        const ear = calculateAverageEAR(landmarks);
+        
+        // Update values
+        txtEarVal.innerText = ear.toFixed(2);
+        earHistory.push(ear);
+        earHistory.shift(); // keep sliding queue of 100 samples
+        
+        // Draw facial overlay tracking indicators
+        drawTrackingMesh(landmarks, ear);
+        
+        // Drowsiness Detection Logic
+        evaluateDrowsiness(ear);
+      } else {
+        txtEyeStatus.innerText = "NO FACE DETECTED";
+        txtEyeStatus.className = "card-val txt-red";
+        closedStartTime = null;
+        txtClosedDuration.innerText = "0.0s";
+      }
+    } catch (err) {
+      console.error("Frame processing error:", err);
     }
   }
 

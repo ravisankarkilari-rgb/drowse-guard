@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 import { supabase } from "../supabase/config";
 import { useNavigate } from "react-router-dom";
-import { FilesetResolver, FaceLandmarker } from "@mediapipe/tasks-vision";
 
 export default function Dashboard() {
   const [user, setUser] = useState(null);
@@ -27,20 +26,36 @@ export default function Dashboard() {
   useEffect(() => {
     supabase.auth.getUser().then(({ data: { user } }) => setUser(user));
 
-    // Load MediaPipe Face Landmarker from high-speed secure CDN
+    // Load MediaPipe Face Landmarker from high-speed secure CDN dynamically
     async function loadModel() {
       try {
+        const mp = await import("@mediapipe/tasks-vision");
+        const FilesetResolver = mp.FilesetResolver;
+        const FaceLandmarker = mp.FaceLandmarker;
+
         const vision = await FilesetResolver.forVisionTasks(
-          "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.8/wasm"
+          "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/wasm"
         );
-        faceLandmarkerRef.current = await FaceLandmarker.createFromOptions(vision, {
-          baseOptions: {
-            modelAssetPath: "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",
-            delegate: "GPU"
-          },
-          runningMode: "VIDEO",
-          numFaces: 1
-        });
+        try {
+          faceLandmarkerRef.current = await FaceLandmarker.createFromOptions(vision, {
+            baseOptions: {
+              modelAssetPath: "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",
+              delegate: "GPU"
+            },
+            runningMode: "VIDEO",
+            numFaces: 1
+          });
+        } catch (gpuError) {
+          console.warn("GPU delegation failed. Retrying with CPU delegate...", gpuError);
+          faceLandmarkerRef.current = await FaceLandmarker.createFromOptions(vision, {
+            baseOptions: {
+              modelAssetPath: "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",
+              delegate: "CPU"
+            },
+            runningMode: "VIDEO",
+            numFaces: 1
+          });
+        }
         setIsModelLoaded(true);
         console.log("MediaPipe Face Landmarker loaded successfully!");
       } catch (error) {
@@ -80,6 +95,10 @@ export default function Dashboard() {
 
   const startCamera = async () => {
     try {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        throw new Error("Webcam access is not supported by your browser or requires a secure connection (HTTPS).");
+      }
+
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { width: 640, height: 480, facingMode: "user" }
       });
@@ -93,11 +112,15 @@ export default function Dashboard() {
           alarmAudio.currentTime = 0;
         }).catch(e => console.log("Audio pre-unlock allowed:", e));
 
-        videoRef.current.addEventListener("loadedmetadata", onVideoLoaded);
+        if (videoRef.current.readyState >= 1) {
+          onVideoLoaded();
+        } else {
+          videoRef.current.addEventListener("loadedmetadata", onVideoLoaded);
+        }
       }
     } catch (err) {
       console.error("Camera access blocked:", err);
-      alert("Could not access your camera. Please ensure camera permissions are granted!");
+      alert(`Could not access your camera: ${err.message || err}\nPlease ensure camera permissions are granted and you are using a secure connection (HTTPS).`);
       setActive(false);
     }
   };
@@ -123,9 +146,15 @@ export default function Dashboard() {
   };
 
   const onVideoLoaded = () => {
+    if (videoRef.current) {
+      videoRef.current.removeEventListener("loadedmetadata", onVideoLoaded);
+    }
     if (canvasRef.current && videoRef.current) {
       canvasRef.current.width = videoRef.current.videoWidth;
       canvasRef.current.height = videoRef.current.videoHeight;
+    }
+    if (animationRef.current) {
+      cancelAnimationFrame(animationRef.current);
     }
     animationRef.current = requestAnimationFrame(detectFrame);
   };
@@ -136,29 +165,38 @@ export default function Dashboard() {
 
     const video = videoRef.current;
     const canvas = canvasRef.current;
+    if (!canvas) {
+      animationRef.current = requestAnimationFrame(detectFrame);
+      return;
+    }
     const ctx = canvas.getContext("2d");
 
-    if (video.currentTime !== video.lastVideoTime) {
+    // Only detect if video has enough frame data and time has changed
+    if (video.readyState >= 2 && video.currentTime !== video.lastVideoTime) {
       video.lastVideoTime = video.currentTime;
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
       
-      const results = faceLandmarkerRef.current.detectForVideo(video, Date.now());
-      
-      if (results.faceLandmarks && results.faceLandmarks.length > 0) {
-        const landmarks = results.faceLandmarks[0];
-        const ear = calculateAverageEAR(landmarks);
+      try {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        const results = faceLandmarkerRef.current.detectForVideo(video, Date.now());
         
-        // Draw overlays
-        drawEyeMesh(ctx, landmarks, ear, canvas.width, canvas.height);
-        
-        // Drowsiness state machine
-        evaluateDrowsiness(ear);
-      } else {
-        setStatus(prev => ({
-          ...prev,
-          eye_status: "no face detected",
-          closed_frames: 0
-        }));
+        if (results.faceLandmarks && results.faceLandmarks.length > 0) {
+          const landmarks = results.faceLandmarks[0];
+          const ear = calculateAverageEAR(landmarks);
+          
+          // Draw overlays
+          drawEyeMesh(ctx, landmarks, ear, canvas.width, canvas.height);
+          
+          // Drowsiness state machine
+          evaluateDrowsiness(ear);
+        } else {
+          setStatus(prev => ({
+            ...prev,
+            eye_status: "no face detected",
+            closed_frames: 0
+          }));
+        }
+      } catch (err) {
+        console.error("Frame detection error:", err);
       }
     }
     animationRef.current = requestAnimationFrame(detectFrame);
