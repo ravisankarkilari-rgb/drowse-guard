@@ -265,13 +265,37 @@ async def predict(file: UploadFile = File(...)):
         "threshold": state["threshold"]
     }
 
+def is_stream_reachable(url: str, timeout: float = 0.5) -> bool:
+    """
+    Quickly checks if a stream URL is reachable via socket connection to bypass
+    OpenCV's extremely long blocking network timeouts.
+    """
+    import socket
+    from urllib.parse import urlparse
+    try:
+        parsed = urlparse(url)
+        host = parsed.hostname
+        port = parsed.port or (80 if parsed.scheme == 'http' else 443)
+        if not host:
+            return False
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except Exception:
+        return False
+
 def generate_stream():
     stream_url = "http://192.168.1.5:8080/video"
-    cap = cv2.VideoCapture(stream_url)
+    
+    # Fast reachability pre-check to prevent blocking OpenCV timeout
+    if is_stream_reachable(stream_url, timeout=0.5):
+        print(f"IP Webcam stream is reachable. Opening: {stream_url}")
+        cap = cv2.VideoCapture(stream_url)
+    else:
+        print(f"IP Webcam stream unreachable or offline. Falling back instantly to local camera (0)...")
+        cap = cv2.VideoCapture(0)
     
     if not cap.isOpened():
-        print("Could not open IP Webcam stream at http://192.168.1.5:8080/video. Falling back to local camera (0)...")
-        cap = cv2.VideoCapture(0)
+        print("Failed to open fallback local camera (0).")
 
     consecutive_failures = 0
     while True:

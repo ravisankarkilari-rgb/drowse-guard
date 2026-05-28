@@ -167,10 +167,30 @@ async def predict_frame(file: UploadFile = File(...)):
         "closed_frames": state["closed_frames"],
     }
 
+def is_stream_reachable(url: str, timeout: float = 0.5) -> bool:
+    """
+    Quickly checks if a stream URL is reachable via socket connection to bypass
+    OpenCV's extremely long blocking network timeouts.
+    """
+    import socket
+    from urllib.parse import urlparse
+    try:
+        parsed = urlparse(url)
+        host = parsed.hostname
+        port = parsed.port or (80 if parsed.scheme == 'http' else 443)
+        if not host:
+            return False
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except Exception:
+        return False
+
 def generate_stream():
     stream_url = f"http://{PHONE_IP}:{PORT}/video"
-    cap = cv2.VideoCapture(stream_url)
-    if not cap.isOpened():
+    
+    if is_stream_reachable(stream_url, timeout=0.5):
+        cap = cv2.VideoCapture(stream_url)
+    else:
         cap = cv2.VideoCapture(0)
 
     while True:

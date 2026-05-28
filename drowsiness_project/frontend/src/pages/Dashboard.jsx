@@ -10,11 +10,14 @@ export default function Dashboard() {
   const [sensitivity, setSensitivity] = useState(20);
   const [earThreshold, setEarThreshold] = useState(0.25);
   const [alarmAudio] = useState(() => {
-    const audio = new Audio("https://actions.google.com/sounds/v1/alarms/alarm_clock.ogg");
+    const audio = new Audio("/alarm.mp3");
     audio.loop = true;
     return audio;
   });
   const navigate = useNavigate();
+
+  const [mode, setMode] = useState("backend"); // "backend" or "local"
+  const API_URL = process.env.REACT_APP_API_URL || "http://localhost:8000";
 
   // Edge AI refs
   const faceLandmarkerRef = useRef(null);
@@ -65,8 +68,8 @@ export default function Dashboard() {
       const osc = ctx.createOscillator();
       const gainNode = ctx.createGain();
 
-      osc.type = "sawtooth"; // high-urgency saw wave
-      osc.frequency.setValueAtTime(880, ctx.currentTime);
+      osc.type = "square"; // piercing square wave
+      osc.frequency.setValueAtTime(2800, ctx.currentTime); // 2.8kHz is highly distressing and alertive
       gainNode.gain.setValueAtTime(0.4, ctx.currentTime);
 
       osc.connect(gainNode);
@@ -76,16 +79,17 @@ export default function Dashboard() {
       oscRef.current = osc;
       gainNodeRef.current = gainNode;
 
-      let high = true;
+      // Pulse the volume (beep-beep-beep) for an industrial warning alarm
+      let activeState = true;
       sirenIntervalRef.current = setInterval(() => {
-        if (oscRef.current && audioCtxRef.current) {
-          oscRef.current.frequency.setValueAtTime(
-            high ? 988 : 660,
+        if (gainNodeRef.current && audioCtxRef.current) {
+          gainNodeRef.current.gain.setValueAtTime(
+            activeState ? 0.4 : 0.0,
             audioCtxRef.current.currentTime
           );
-          high = !high;
+          activeState = !activeState;
         }
-      }, 150);
+      }, 120); // fast pulsing beep
     } catch (e) {
       console.error("Web Audio synthetic alarm failed:", e);
     }
@@ -160,6 +164,43 @@ export default function Dashboard() {
     };
   }, []);
 
+  // Backend status polling loop
+  useEffect(() => {
+    let interval;
+    if (mode === "backend" && active) {
+      interval = setInterval(() => {
+        fetch(`${API_URL}/status`)
+          .then(res => res.json())
+          .then(data => {
+            setStatus(prev => {
+              const isAlarm = data.alarm;
+              if (isAlarm && !prev.alarm) {
+                setAlerts(prevAlerts => {
+                  const newAlert = { time: new Date().toLocaleTimeString(), msg: "Drowsiness Detected!" };
+                  return [newAlert, ...prevAlerts].slice(0, 10);
+                });
+              }
+              return {
+                eye_status: data.eye_status || "unknown",
+                drowsy: data.drowsy || false,
+                alarm: isAlarm || false,
+                closed_duration: (data.closed_frames || 0) / 20.0,
+                closed_frames: data.closed_frames || 0,
+                frame_count: data.frame_count || 0,
+                live_ear: data.live_ear || 0
+              };
+            });
+          })
+          .catch(err => console.error("Backend status polling error:", err));
+      }, 500);
+    } else if (mode === "backend" && !active) {
+      setStatus({ eye_status: "unknown", drowsy: false, alarm: false, closed_duration: 0, closed_frames: 0, frame_count: 0, live_ear: 0 });
+    }
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, [active, mode, API_URL]);
+
   // Handle playing/pausing the alarm sound
   useEffect(() => {
     if (status.alarm) {
@@ -177,15 +218,21 @@ export default function Dashboard() {
     };
   }, [status.alarm, alarmAudio]);
 
-  // Start / Stop camera based on active state
+  // Start / Stop camera based on active state (only when in local Edge-AI mode)
   useEffect(() => {
-    if (active) {
-      startCamera();
-    } else {
-      stopCamera();
+    if (mode === "local") {
+      if (active) {
+        startCamera();
+      } else {
+        stopCamera();
+      }
     }
-    return () => stopCamera();
-  }, [active]);
+    return () => {
+      if (mode === "local") {
+        stopCamera();
+      }
+    };
+  }, [active, mode]);
 
   const startCamera = async () => {
     try {
@@ -194,7 +241,11 @@ export default function Dashboard() {
       }
 
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { width: 640, height: 480, facingMode: "user" }
+        video: {
+          width: { ideal: 640 },
+          height: { ideal: 480 },
+          facingMode: "user"
+        }
       });
       streamRef.current = stream;
       if (videoRef.current) {
@@ -434,7 +485,19 @@ export default function Dashboard() {
   };
 
   const applySensitivity = () => {
-    alert(`Sensitivity threshold calibrated to: ${sensitivity} consecutive closed frames.`);
+    if (mode === "backend") {
+      fetch(`${API_URL}/config?ear_frames=${sensitivity}`, { method: "PUT" })
+        .then(res => res.json())
+        .then(data => {
+          alert(`Backend sensitivity successfully set to ${sensitivity} frames.`);
+        })
+        .catch(err => {
+          console.error("Failed to update backend config:", err);
+          alert(`Failed to update backend: ${err.message || err}`);
+        });
+    } else {
+      alert(`Sensitivity threshold calibrated to: ${sensitivity} consecutive closed frames.`);
+    }
   };
 
   const getAvatar = () => {
@@ -550,10 +613,23 @@ export default function Dashboard() {
             
             <div className="video-container">
               {active ? (
-                <div style={{ position: "relative", width: "100%", height: "100%", display: "flex", justifyContent: "center", alignItems: "center" }}>
-                  <video ref={videoRef} autoPlay playsInline muted style={{ width: "100%", height: "100%", objectFit: "cover", transform: "scaleX(-1)" }} />
-                  <canvas ref={canvasRef} style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", objectFit: "cover", transform: "scaleX(-1)", zIndex: 10 }} />
-                </div>
+                mode === "backend" ? (
+                  <img 
+                    src={`${API_URL}/stream`} 
+                    alt="Live Stream Feed" 
+                    className="video-stream" 
+                    style={{ width: "100%", height: "100%", objectFit: "contain" }}
+                    onError={(e) => {
+                      e.target.onerror = null;
+                      console.warn("Failed to stream from local Python backend. Ensure Python app.py is running on localhost:8000.");
+                    }}
+                  />
+                ) : (
+                  <div style={{ position: "relative", width: "100%", height: "100%", display: "flex", justifyContent: "center", alignItems: "center" }}>
+                    <video ref={videoRef} autoPlay playsInline muted style={{ width: "100%", height: "100%", objectFit: "cover", transform: "scaleX(-1)" }} />
+                    <canvas ref={canvasRef} style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", objectFit: "cover", transform: "scaleX(-1)", zIndex: 10 }} />
+                  </div>
+                )
               ) : (
                 <div className="placeholder">
                   <div className="placeholder-icon">📷</div>
@@ -566,7 +642,52 @@ export default function Dashboard() {
           {/* Right Panel */}
           <div className="right-panel">
             <div className="panel-card glass-panel">
-              <h4 className="panel-title">Sensitivity Control</h4>
+              <h4 className="panel-title">Detection Engine</h4>
+              <p className="panel-desc">Choose between the Python CNN Backend or Local offline Edge-AI.</p>
+              
+              <div style={{ display: "flex", gap: "10px", marginBottom: "20px" }}>
+                <button 
+                  onClick={() => {
+                    setMode("backend");
+                    if (active) {
+                      stopCamera();
+                    }
+                  }}
+                  className="feed-btn"
+                  style={{
+                    flex: 1,
+                    background: mode === "backend" ? "var(--primary)" : "rgba(255,255,255,0.05)",
+                    border: mode === "backend" ? "1px solid var(--primary)" : "1px solid rgba(255,255,255,0.1)",
+                    color: "white",
+                    padding: "8px",
+                    borderRadius: "10px",
+                    fontWeight: "600",
+                    cursor: "pointer"
+                  }}
+                >
+                  Python CNN
+                </button>
+                <button 
+                  onClick={() => {
+                    setMode("local");
+                  }}
+                  className="feed-btn"
+                  style={{
+                    flex: 1,
+                    background: mode === "local" ? "var(--primary)" : "rgba(255,255,255,0.05)",
+                    border: mode === "local" ? "1px solid var(--primary)" : "1px solid rgba(255,255,255,0.1)",
+                    color: "white",
+                    padding: "8px",
+                    borderRadius: "10px",
+                    fontWeight: "600",
+                    cursor: "pointer"
+                  }}
+                >
+                  Local Edge-AI
+                </button>
+              </div>
+
+              <h4 className="panel-title" style={{ marginTop: "20px" }}>Sensitivity Control</h4>
               <p className="panel-desc">Adjust the consecutive frame delay and calibration thresholds.</p>
               
               <div className="sensitivity-display">
@@ -587,7 +708,7 @@ export default function Dashboard() {
               </div>
               
               <input 
-                type="range" min="0.15" max="0.30" step="0.01"
+                type="range" min="0.15" max="0.35" step="0.01"
                 value={earThreshold} onChange={e => setEarThreshold(Number(e.target.value))}
                 className="slider"
               />

@@ -35,12 +35,30 @@ if face_cascade.empty() or eye_cascade.empty():
     print("Error: Could not load OpenCV Haar Cascades.")
     sys.exit(1)
 
-stream_url = f"http://{PHONE_IP}:{PORT}/video"
-print(f"Connecting to IP Webcam stream URL: {stream_url}")
-cap = cv2.VideoCapture(stream_url)
+def is_stream_reachable(url: str, timeout: float = 0.5) -> bool:
+    """
+    Quickly checks if a stream URL is reachable via socket connection to bypass
+    OpenCV's extremely long blocking network timeouts.
+    """
+    import socket
+    from urllib.parse import urlparse
+    try:
+        parsed = urlparse(url)
+        host = parsed.hostname
+        port = parsed.port or (80 if parsed.scheme == 'http' else 443)
+        if not host:
+            return False
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except Exception:
+        return False
 
-if not cap.isOpened():
-    print("Phone stream failed or timed out. Falling back to default webcam (cv2.VideoCapture(0))...")
+stream_url = f"http://{PHONE_IP}:{PORT}/video"
+if is_stream_reachable(stream_url, timeout=0.5):
+    print(f"Connecting to IP Webcam stream URL: {stream_url}")
+    cap = cv2.VideoCapture(stream_url)
+else:
+    print(f"IP Webcam stream unreachable or offline. Falling back instantly to default webcam (cv2.VideoCapture(0))...")
     cap = cv2.VideoCapture(0)
 
 if not cap.isOpened():
