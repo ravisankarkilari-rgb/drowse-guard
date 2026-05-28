@@ -5,7 +5,7 @@ import { useNavigate } from "react-router-dom";
 export default function Dashboard() {
   const [user, setUser] = useState(null);
   const [active, setActive] = useState(false);
-  const [status, setStatus] = useState({ eye_status: "unknown", drowsy: false, alarm: false, closed_duration: 0, closed_frames: 0, frame_count: 0 });
+  const [status, setStatus] = useState({ eye_status: "unknown", drowsy: false, alarm: false, closed_duration: 0, closed_frames: 0, frame_count: 0, live_ear: 0 });
   const [alerts, setAlerts] = useState([]);
   const [sensitivity, setSensitivity] = useState(20);
   const [earThreshold, setEarThreshold] = useState(0.25);
@@ -23,6 +23,23 @@ export default function Dashboard() {
   const streamRef = useRef(null);
   const animationRef = useRef(null);
   const [isModelLoaded, setIsModelLoaded] = useState(false);
+
+  // Synchronization refs to solve React stale closures inside requestAnimationFrame loop
+  const earThresholdRef = useRef(earThreshold);
+  const sensitivityRef = useRef(sensitivity);
+  const activeRef = useRef(active);
+
+  useEffect(() => {
+    earThresholdRef.current = earThreshold;
+  }, [earThreshold]);
+
+  useEffect(() => {
+    sensitivityRef.current = sensitivity;
+  }, [sensitivity]);
+
+  useEffect(() => {
+    activeRef.current = active;
+  }, [active]);
 
   // Stable time-based tracking refs
   const closedStartTimeRef = useRef(null);
@@ -245,7 +262,7 @@ export default function Dashboard() {
 
   // Face Landmarking & EAR Tracking loop
   const detectFrame = () => {
-    if (!videoRef.current || !active) return;
+    if (!videoRef.current || !activeRef.current) return;
 
     // Defer early termination if model is still loading to keep loop alive
     if (!faceLandmarkerRef.current) {
@@ -317,8 +334,10 @@ export default function Dashboard() {
 
   // Drowsiness local state machine
   const evaluateDrowsiness = (ear) => {
-    const isClosed = ear < earThreshold;
-    const alarmDelaySeconds = sensitivity / 20.0; // translate frames to stable duration seconds (e.g. 20 frames = 1.0s)
+    const currentThreshold = earThresholdRef.current;
+    const currentSensitivity = sensitivityRef.current;
+    const isClosed = ear < currentThreshold;
+    const alarmDelaySeconds = currentSensitivity / 20.0; // translate frames to stable duration seconds (e.g. 20 frames = 1.0s)
     
     setStatus(prev => {
       let nextClosedStartTime = prev.closed_duration > 0 ? closedStartTimeRef.current : null;
@@ -369,16 +388,18 @@ export default function Dashboard() {
         alarm: isAlarm,
         closed_duration: nextClosedDuration,
         closed_frames: Math.round(nextClosedDuration * 20),
-        frame_count: prev.frame_count + 1
+        frame_count: prev.frame_count + 1,
+        live_ear: ear
       };
     });
   };
 
   // Draw eye meshes overlays
   function drawEyeMesh(ctx, landmarks, ear, width, height) {
+    const currentThreshold = earThresholdRef.current;
     ctx.lineWidth = 1.5;
-    ctx.strokeStyle = ear < earThreshold ? "rgb(239, 68, 68)" : "rgb(6, 182, 212)";
-    ctx.fillStyle = ear < earThreshold ? "rgba(239, 68, 68, 0.25)" : "rgba(6, 182, 212, 0.15)";
+    ctx.strokeStyle = ear < currentThreshold ? "rgb(239, 68, 68)" : "rgb(6, 182, 212)";
+    ctx.fillStyle = ear < currentThreshold ? "rgba(239, 68, 68, 0.25)" : "rgba(6, 182, 212, 0.15)";
 
     function drawContour(indices) {
       ctx.beginPath();
@@ -480,7 +501,7 @@ export default function Dashboard() {
               <div className="card-icon">⏱️</div>
             </div>
             <div className="card-value warning-text">{status.closed_duration ? status.closed_duration.toFixed(1) + "s" : "0.0s"}</div>
-            <div className="card-subtext">Current consecutive</div>
+            <div className="card-subtext">Live EAR: {status.live_ear ? status.live_ear.toFixed(2) : "0.00"}</div>
           </div>
           
           <div className={`metric-card alert-card ${status.alarm ? 'alarm-active' : ''}`}>
