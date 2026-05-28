@@ -1,8 +1,7 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { supabase } from "../supabase/config";
 import { useNavigate } from "react-router-dom";
-
-const API_URL = process.env.REACT_APP_API_URL || "http://localhost:8000";
+import { FilesetResolver, FaceLandmarker } from "@mediapipe/tasks-vision";
 
 export default function Dashboard() {
   const [user, setUser] = useState(null);
@@ -17,8 +16,45 @@ export default function Dashboard() {
   });
   const navigate = useNavigate();
 
+  // Edge AI refs
+  const faceLandmarkerRef = useRef(null);
+  const videoRef = useRef(null);
+  const canvasRef = useRef(null);
+  const streamRef = useRef(null);
+  const animationRef = useRef(null);
+  const [isModelLoaded, setIsModelLoaded] = useState(false);
+
   useEffect(() => {
     supabase.auth.getUser().then(({ data: { user } }) => setUser(user));
+
+    // Load MediaPipe Face Landmarker from high-speed secure CDN
+    async function loadModel() {
+      try {
+        const vision = await FilesetResolver.forVisionTasks(
+          "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.8/wasm"
+        );
+        faceLandmarkerRef.current = await FaceLandmarker.createFromOptions(vision, {
+          baseOptions: {
+            modelAssetPath: "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",
+            delegate: "GPU"
+          },
+          runningMode: "VIDEO",
+          numFaces: 1
+        });
+        setIsModelLoaded(true);
+        console.log("MediaPipe Face Landmarker loaded successfully!");
+      } catch (error) {
+        console.error("Failed to load MediaPipe Face Landmarker:", error);
+      }
+    }
+    loadModel();
+
+    return () => {
+      if (animationRef.current) cancelAnimationFrame(animationRef.current);
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(track => track.stop());
+      }
+    };
   }, []);
 
   // Handle playing/pausing the alarm sound
@@ -32,28 +68,185 @@ export default function Dashboard() {
     return () => alarmAudio.pause();
   }, [status.alarm, alarmAudio]);
 
+  // Start / Stop camera based on active state
   useEffect(() => {
-    let interval;
     if (active) {
-      interval = setInterval(() => {
-        fetch(`${API_URL}/status`)
-          .then(res => res.json())
-          .then(data => {
-            setStatus(data);
-            if (data.alarm) {
-              setAlerts(prev => {
-                const newAlert = { time: new Date().toLocaleTimeString(), msg: "Drowsiness Detected!" };
-                return [newAlert, ...prev].slice(0, 10);
-              });
-            }
-          })
-          .catch(err => console.error("API error:", err));
-      }, 1000);
+      startCamera();
     } else {
-      setStatus({ eye_status: "unknown", drowsy: false, alarm: false, closed_frames: 0, frame_count: 0 });
+      stopCamera();
     }
-    return () => clearInterval(interval);
+    return () => stopCamera();
   }, [active]);
+
+  const startCamera = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { width: 640, height: 480, facingMode: "user" }
+      });
+      streamRef.current = stream;
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        
+        // Play silent sound to unlock browser audio restrictions on first user click
+        alarmAudio.play().then(() => {
+          alarmAudio.pause();
+          alarmAudio.currentTime = 0;
+        }).catch(e => console.log("Audio pre-unlock allowed:", e));
+
+        videoRef.current.addEventListener("loadedmetadata", onVideoLoaded);
+      }
+    } catch (err) {
+      console.error("Camera access blocked:", err);
+      alert("Could not access your camera. Please ensure camera permissions are granted!");
+      setActive(false);
+    }
+  };
+
+  const stopCamera = () => {
+    if (animationRef.current) {
+      cancelAnimationFrame(animationRef.current);
+      animationRef.current = null;
+    }
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(track => track.stop());
+      streamRef.current = null;
+    }
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+      videoRef.current.removeEventListener("loadedmetadata", onVideoLoaded);
+    }
+    if (canvasRef.current) {
+      const ctx = canvasRef.current.getContext("2d");
+      ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
+    }
+    setStatus({ eye_status: "unknown", drowsy: false, alarm: false, closed_frames: 0, frame_count: 0 });
+  };
+
+  const onVideoLoaded = () => {
+    if (canvasRef.current && videoRef.current) {
+      canvasRef.current.width = videoRef.current.videoWidth;
+      canvasRef.current.height = videoRef.current.videoHeight;
+    }
+    animationRef.current = requestAnimationFrame(detectFrame);
+  };
+
+  // Face Landmarking & EAR Tracking loop
+  const detectFrame = () => {
+    if (!videoRef.current || !faceLandmarkerRef.current || !active) return;
+
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext("2d");
+
+    if (video.currentTime !== video.lastVideoTime) {
+      video.lastVideoTime = video.currentTime;
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      
+      const results = faceLandmarkerRef.current.detectForVideo(video, Date.now());
+      
+      if (results.faceLandmarks && results.faceLandmarks.length > 0) {
+        const landmarks = results.faceLandmarks[0];
+        const ear = calculateAverageEAR(landmarks);
+        
+        // Draw overlays
+        drawEyeMesh(ctx, landmarks, ear, canvas.width, canvas.height);
+        
+        // Drowsiness state machine
+        evaluateDrowsiness(ear);
+      } else {
+        setStatus(prev => ({
+          ...prev,
+          eye_status: "no face detected",
+          closed_frames: 0
+        }));
+      }
+    }
+    animationRef.current = requestAnimationFrame(detectFrame);
+  };
+
+  // Mathematical EAR helper formulas
+  function distance3D(p1, p2) {
+    return Math.sqrt(
+      Math.pow(p1.x - p2.x, 2) +
+      Math.pow(p1.y - p2.y, 2) +
+      Math.pow(p1.z - p2.z, 2)
+    );
+  }
+
+  function calculateAverageEAR(landmarks) {
+    const dLeftVertical1 = distance3D(landmarks[160], landmarks[153]);
+    const dLeftVertical2 = distance3D(landmarks[158], landmarks[144]);
+    const dLeftHorizontal = distance3D(landmarks[33], landmarks[133]);
+    const leftEAR = (dLeftVertical1 + dLeftVertical2) / (2.0 * dLeftHorizontal);
+
+    const dRightVertical1 = distance3D(landmarks[385], landmarks[373]);
+    const dRightVertical2 = distance3D(landmarks[387], landmarks[380]);
+    const dRightHorizontal = distance3D(landmarks[263], landmarks[362]);
+    const rightEAR = (dRightVertical1 + dRightVertical2) / (2.0 * dRightHorizontal);
+
+    return (leftEAR + rightEAR) / 2.0;
+  }
+
+  // Drowsiness local state machine
+  const evaluateDrowsiness = (ear) => {
+    const isClosed = ear < 0.25;
+    
+    setStatus(prev => {
+      let nextClosedFrames = isClosed ? prev.closed_frames + 1 : 0;
+      let isAlarm = nextClosedFrames >= sensitivity;
+      let isDrowsy = nextClosedFrames >= (sensitivity / 2);
+
+      // Trigger recent alerts list dynamically in React state
+      if (isAlarm && !prev.alarm) {
+        setAlerts(prevAlerts => {
+          const newAlert = { time: new Date().toLocaleTimeString(), msg: "Drowsiness Detected!" };
+          return [newAlert, ...prevAlerts].slice(0, 10);
+        });
+      }
+
+      return {
+        eye_status: isClosed ? "closed" : "open",
+        drowsy: isDrowsy,
+        alarm: isAlarm,
+        closed_frames: nextClosedFrames,
+        frame_count: prev.frame_count + 1
+      };
+    });
+  };
+
+  // Draw eye meshes overlays
+  function drawEyeMesh(ctx, landmarks, ear, width, height) {
+    ctx.lineWidth = 1.5;
+    ctx.strokeStyle = ear < 0.25 ? "rgb(239, 68, 68)" : "rgb(6, 182, 212)";
+    ctx.fillStyle = ear < 0.25 ? "rgba(239, 68, 68, 0.25)" : "rgba(6, 182, 212, 0.15)";
+
+    function drawContour(indices) {
+      ctx.beginPath();
+      const first = landmarks[indices[0]];
+      ctx.moveTo(first.x * width, first.y * height);
+      for (let i = 1; i < indices.length; i++) {
+        const p = landmarks[indices[i]];
+        ctx.lineTo(p.x * width, p.y * height);
+      }
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+    }
+
+    const leftEye = [33, 160, 158, 133, 153, 144];
+    const rightEye = [263, 385, 387, 362, 373, 380];
+
+    drawContour(leftEye);
+    drawContour(rightEye);
+    
+    ctx.fillStyle = "#ffffff";
+    [...leftEye, ...rightEye].forEach(idx => {
+      const p = landmarks[idx];
+      ctx.beginPath();
+      ctx.arc(p.x * width, p.y * height, 1.5, 0, 2 * Math.PI);
+      ctx.fill();
+    });
+  }
 
   const handleLogout = async () => {
     await supabase.auth.signOut();
@@ -61,9 +254,7 @@ export default function Dashboard() {
   };
 
   const applySensitivity = () => {
-    fetch(`${API_URL}/config?ear_frames=${sensitivity}`, { method: "PUT" })
-      .then(res => res.json())
-      .catch(err => console.error(err));
+    alert(`Sensitivity threshold calibrated to: ${sensitivity} consecutive closed frames.`);
   };
 
   const getAvatar = () => {
@@ -179,7 +370,10 @@ export default function Dashboard() {
             
             <div className="video-container">
               {active ? (
-                <img src={`${API_URL}/stream`} alt="Live Feed" className="video-stream" />
+                <div style={{ position: "relative", width: "100%", height: "100%", display: "flex", justifyContent: "center", alignItems: "center" }}>
+                  <video ref={videoRef} autoPlay playsInline muted style={{ width: "100%", height: "100%", objectFit: "cover", transform: "scaleX(-1)" }} />
+                  <canvas ref={canvasRef} style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", objectFit: "cover", transform: "scaleX(-1)", zIndex: 10 }} />
+                </div>
               ) : (
                 <div className="placeholder">
                   <div className="placeholder-icon">📷</div>
