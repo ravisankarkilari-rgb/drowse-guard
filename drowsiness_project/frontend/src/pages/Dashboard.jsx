@@ -735,7 +735,24 @@ export default function Dashboard() {
                 {active && <span className="recording-indicator">REC</span>}
               </div>
               <button 
-                onClick={() => setActive(!active)} 
+                onClick={() => {
+                  // Direct user gesture audio unlock for perfect mobile browser support (iOS Safari & Android Chrome)
+                  try {
+                    if (!audioCtxRef.current) {
+                      audioCtxRef.current = new (window.AudioContext || window.webkitAudioContext)();
+                    }
+                    if (audioCtxRef.current.state === "suspended") {
+                      audioCtxRef.current.resume();
+                    }
+                    alarmAudio.play().then(() => {
+                      alarmAudio.pause();
+                      alarmAudio.currentTime = 0;
+                    }).catch(e => console.log("Silent audio gesture unlock successful:", e));
+                  } catch (e) {
+                    console.warn("Mobile browser gesture audio unlock failed:", e);
+                  }
+                  setActive(!active);
+                }} 
                 className={`feed-btn ${active ? "feed-btn-stop" : "feed-btn-start"}`}
               >
                 {active ? "Stop Feed" : "Start Feed"}
