@@ -112,6 +112,13 @@ export default function Dashboard() {
           alarmAudio.currentTime = 0;
         }).catch(e => console.log("Audio pre-unlock allowed:", e));
 
+        // Force explicit stream play to bypass browser autoplay blocks
+        videoRef.current.play().then(() => {
+          console.log("Webcam feed playing successfully!");
+        }).catch(err => {
+          console.warn("Explicit play failed, web context might require user permission first:", err);
+        });
+
         if (videoRef.current.readyState >= 1) {
           onVideoLoaded();
         } else {
@@ -161,7 +168,13 @@ export default function Dashboard() {
 
   // Face Landmarking & EAR Tracking loop
   const detectFrame = () => {
-    if (!videoRef.current || !faceLandmarkerRef.current || !active) return;
+    if (!videoRef.current || !active) return;
+
+    // Defer early termination if model is still loading to keep loop alive
+    if (!faceLandmarkerRef.current) {
+      animationRef.current = requestAnimationFrame(detectFrame);
+      return;
+    }
 
     const video = videoRef.current;
     const canvas = canvasRef.current;

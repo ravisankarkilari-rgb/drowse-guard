@@ -197,6 +197,13 @@ async function startMonitoring() {
     });
     
     video.srcObject = webcamStream;
+
+    // Explicitly call play to bypass strict browser autoplay locks
+    video.play().then(() => {
+      console.log("Webcam feed playing successfully!");
+    }).catch(err => {
+      console.warn("Explicit play failed or was delayed:", err);
+    });
     
     if (video.readyState >= 1) {
       onVideoLoaded();
