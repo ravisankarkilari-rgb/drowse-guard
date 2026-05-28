@@ -64,8 +64,14 @@ rangeClosedTime.addEventListener("input", (e) => {
 async function initMediaPipe() {
   statusPill.innerText = "LOADING MODEL...";
   try {
-    // Initialize WebAssembly fileset loader locally (using explicit origin locator)
-    const vision = await FilesetResolver.forVisionTasks(window.location.origin + "/wasm");
+    // Robust WebAssembly fileset resolution: try relative first, fallback to origin-based absolute
+    let vision;
+    try {
+      vision = await FilesetResolver.forVisionTasks("./wasm");
+    } catch (e) {
+      console.warn("Failed relative WASM load, falling back to absolute origin:", e);
+      vision = await FilesetResolver.forVisionTasks(window.location.origin + "/wasm");
+    }
     
     // Load optimized face landmarker task locally
     faceLandmarker = await FaceLandmarker.createFromOptions(vision, {
@@ -108,11 +114,44 @@ async function initMediaPipe() {
 // Initialize on load
 initMediaPipe();
 
+// Helper to unlock Web Audio API on mobile user interaction
+function unlockAudioContext() {
+  try {
+    if (!audioCtx) {
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    }
+    if (audioCtx.state === "suspended") {
+      audioCtx.resume();
+    }
+    
+    // Play an ultra-short silence buffer to satisfy browser restrictions
+    const buffer = audioCtx.createBuffer(1, 1, 22050);
+    const source = audioCtx.createBufferSource();
+    source.buffer = buffer;
+    source.connect(audioCtx.destination);
+    source.start(0);
+    console.log("AudioContext successfully unlocked/resumed.");
+  } catch (e) {
+    console.warn("Web Audio unlock failed:", e);
+  }
+}
+
 // ── 3. Toggle webcam and tracking ───────────────────────
 btnToggleMonitor.addEventListener("click", async () => {
   if (!faceLandmarker) {
     alert("Please wait, the MediaPipe AI model is still loading.");
     return;
+  }
+
+  // CRITICAL MOBILE CHROME UNLOCK: Unlock both Web Audio API & HTML5 audio synchronously here
+  unlockAudioContext();
+  try {
+    alarmAudio.play().then(() => {
+      alarmAudio.pause();
+      alarmAudio.currentTime = 0;
+    }).catch(e => console.log("HTML5 audio pre-unlock allowed:", e));
+  } catch (e) {
+    console.warn("HTML5 pre-unlock error:", e);
   }
 
   if (isMonitoring) {
