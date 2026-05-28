@@ -5,9 +5,10 @@ import { useNavigate } from "react-router-dom";
 export default function Dashboard() {
   const [user, setUser] = useState(null);
   const [active, setActive] = useState(false);
-  const [status, setStatus] = useState({ eye_status: "unknown", drowsy: false, alarm: false, closed_frames: 0, frame_count: 0 });
+  const [status, setStatus] = useState({ eye_status: "unknown", drowsy: false, alarm: false, closed_duration: 0, closed_frames: 0, frame_count: 0 });
   const [alerts, setAlerts] = useState([]);
   const [sensitivity, setSensitivity] = useState(20);
+  const [earThreshold, setEarThreshold] = useState(0.25);
   const [alarmAudio] = useState(() => {
     const audio = new Audio("https://actions.google.com/sounds/v1/alarms/alarm_clock.ogg");
     audio.loop = true;
@@ -22,6 +23,76 @@ export default function Dashboard() {
   const streamRef = useRef(null);
   const animationRef = useRef(null);
   const [isModelLoaded, setIsModelLoaded] = useState(false);
+
+  // Stable time-based tracking refs
+  const closedStartTimeRef = useRef(null);
+  const graceStartTimeRef = useRef(null);
+
+  // Hardware-native Web Audio API Alarm refs
+  const audioCtxRef = useRef(null);
+  const oscRef = useRef(null);
+  const gainNodeRef = useRef(null);
+  const sirenIntervalRef = useRef(null);
+
+  const startSyntheticAlarm = () => {
+    try {
+      if (!audioCtxRef.current) {
+        audioCtxRef.current = new (window.AudioContext || window.webkitAudioContext)();
+      }
+      if (audioCtxRef.current.state === "suspended") {
+        audioCtxRef.current.resume();
+      }
+      if (oscRef.current) return; // already playing
+
+      const ctx = audioCtxRef.current;
+      const osc = ctx.createOscillator();
+      const gainNode = ctx.createGain();
+
+      osc.type = "sawtooth"; // high-urgency saw wave
+      osc.frequency.setValueAtTime(880, ctx.currentTime);
+      gainNode.gain.setValueAtTime(0.4, ctx.currentTime);
+
+      osc.connect(gainNode);
+      gainNode.connect(ctx.destination);
+      osc.start();
+
+      oscRef.current = osc;
+      gainNodeRef.current = gainNode;
+
+      let high = true;
+      sirenIntervalRef.current = setInterval(() => {
+        if (oscRef.current && audioCtxRef.current) {
+          oscRef.current.frequency.setValueAtTime(
+            high ? 988 : 660,
+            audioCtxRef.current.currentTime
+          );
+          high = !high;
+        }
+      }, 150);
+    } catch (e) {
+      console.error("Web Audio synthetic alarm failed:", e);
+    }
+  };
+
+  const stopSyntheticAlarm = () => {
+    if (sirenIntervalRef.current) {
+      clearInterval(sirenIntervalRef.current);
+      sirenIntervalRef.current = null;
+    }
+    if (oscRef.current) {
+      try {
+        oscRef.current.stop();
+        oscRef.current.disconnect();
+      } catch (e) {}
+      oscRef.current = null;
+    }
+    if (gainNodeRef.current) {
+      try {
+        gainNodeRef.current.disconnect();
+      } catch (e) {}
+      gainNodeRef.current = null;
+    }
+  };
 
   useEffect(() => {
     supabase.auth.getUser().then(({ data: { user } }) => setUser(user));
@@ -75,12 +146,18 @@ export default function Dashboard() {
   // Handle playing/pausing the alarm sound
   useEffect(() => {
     if (status.alarm) {
+      // Dual alarms: play HTML5 audio file & native Web Audio siren
       alarmAudio.play().catch(e => console.log("Audio play blocked by browser:", e));
+      startSyntheticAlarm();
     } else {
       alarmAudio.pause();
       alarmAudio.currentTime = 0;
+      stopSyntheticAlarm();
     }
-    return () => alarmAudio.pause();
+    return () => {
+      alarmAudio.pause();
+      stopSyntheticAlarm();
+    };
   }, [status.alarm, alarmAudio]);
 
   // Start / Stop camera based on active state
@@ -240,12 +317,43 @@ export default function Dashboard() {
 
   // Drowsiness local state machine
   const evaluateDrowsiness = (ear) => {
-    const isClosed = ear < 0.25;
+    const isClosed = ear < earThreshold;
+    const alarmDelaySeconds = sensitivity / 20.0; // translate frames to stable duration seconds (e.g. 20 frames = 1.0s)
     
     setStatus(prev => {
-      let nextClosedFrames = isClosed ? prev.closed_frames + 1 : 0;
-      let isAlarm = nextClosedFrames >= sensitivity;
-      let isDrowsy = nextClosedFrames >= (sensitivity / 2);
+      let nextClosedStartTime = prev.closed_duration > 0 ? closedStartTimeRef.current : null;
+      let nextClosedDuration = 0;
+
+      if (isClosed) {
+        if (closedStartTimeRef.current === null) {
+          closedStartTimeRef.current = Date.now();
+        }
+        nextClosedStartTime = closedStartTimeRef.current;
+        nextClosedDuration = (Date.now() - closedStartTimeRef.current) / 1000.0;
+        graceStartTimeRef.current = null; // clear grace timer
+      } else {
+        // Implement a 300ms flicker grace period before resetting timer
+        if (closedStartTimeRef.current !== null) {
+          if (graceStartTimeRef.current === null) {
+            graceStartTimeRef.current = Date.now();
+          }
+          const graceElapsed = Date.now() - graceStartTimeRef.current;
+          if (graceElapsed < 300) {
+            // retain closed state during grace period
+            nextClosedDuration = (Date.now() - closedStartTimeRef.current) / 1000.0;
+          } else {
+            // grace period expired, reset closed state
+            closedStartTimeRef.current = null;
+            graceStartTimeRef.current = null;
+            nextClosedDuration = 0;
+          }
+        } else {
+          nextClosedDuration = 0;
+        }
+      }
+
+      let isAlarm = nextClosedDuration >= alarmDelaySeconds;
+      let isDrowsy = nextClosedDuration >= (alarmDelaySeconds / 2.0);
 
       // Trigger recent alerts list dynamically in React state
       if (isAlarm && !prev.alarm) {
@@ -256,10 +364,11 @@ export default function Dashboard() {
       }
 
       return {
-        eye_status: isClosed ? "closed" : "open",
+        eye_status: isClosed ? "closed" : (nextClosedDuration > 0 ? "closed" : "open"),
         drowsy: isDrowsy,
         alarm: isAlarm,
-        closed_frames: nextClosedFrames,
+        closed_duration: nextClosedDuration,
+        closed_frames: Math.round(nextClosedDuration * 20),
         frame_count: prev.frame_count + 1
       };
     });
@@ -268,8 +377,8 @@ export default function Dashboard() {
   // Draw eye meshes overlays
   function drawEyeMesh(ctx, landmarks, ear, width, height) {
     ctx.lineWidth = 1.5;
-    ctx.strokeStyle = ear < 0.25 ? "rgb(239, 68, 68)" : "rgb(6, 182, 212)";
-    ctx.fillStyle = ear < 0.25 ? "rgba(239, 68, 68, 0.25)" : "rgba(6, 182, 212, 0.15)";
+    ctx.strokeStyle = ear < earThreshold ? "rgb(239, 68, 68)" : "rgb(6, 182, 212)";
+    ctx.fillStyle = ear < earThreshold ? "rgba(239, 68, 68, 0.25)" : "rgba(6, 182, 212, 0.15)";
 
     function drawContour(indices) {
       ctx.beginPath();
@@ -367,10 +476,10 @@ export default function Dashboard() {
           
           <div className="metric-card frames-card">
             <div className="card-header">
-              <div className="card-label">Closed Frames</div>
+              <div className="card-label">Closed Duration</div>
               <div className="card-icon">⏱️</div>
             </div>
-            <div className="card-value warning-text">{status.closed_frames}</div>
+            <div className="card-value warning-text">{status.closed_duration ? status.closed_duration.toFixed(1) + "s" : "0.0s"}</div>
             <div className="card-subtext">Current consecutive</div>
           </div>
           
@@ -438,16 +547,28 @@ export default function Dashboard() {
           <div className="right-panel">
             <div className="panel-card glass-panel">
               <h4 className="panel-title">Sensitivity Control</h4>
-              <p className="panel-desc">Adjust how many consecutive frames of closed eyes trigger the alarm.</p>
+              <p className="panel-desc">Adjust the consecutive frame delay and calibration thresholds.</p>
               
               <div className="sensitivity-display">
-                <span className="sensitivity-label">Threshold:</span>
-                <span className="sensitivity-value">{sensitivity} frames</span>
+                <span className="sensitivity-label">Time Threshold:</span>
+                <span className="sensitivity-value">{(sensitivity / 20.0).toFixed(1)}s</span>
               </div>
               
               <input 
                 type="range" min="5" max="60" 
                 value={sensitivity} onChange={e => setSensitivity(Number(e.target.value))}
+                className="slider"
+                style={{marginBottom: '20px'}}
+              />
+
+              <div className="sensitivity-display">
+                <span className="sensitivity-label">EAR Calibration:</span>
+                <span className="sensitivity-value">{earThreshold.toFixed(2)}</span>
+              </div>
+              
+              <input 
+                type="range" min="0.15" max="0.30" step="0.01"
+                value={earThreshold} onChange={e => setEarThreshold(Number(e.target.value))}
                 className="slider"
               />
               
