@@ -758,6 +758,81 @@ export default function Dashboard() {
           color: var(--text-muted);
           font-size: 12px;
         }
+
+        /* ── 10. React Dashboard Mobile Responsiveness ────── */
+        @media (max-width: 900px) {
+          .dashboard-layout {
+            flex-direction: column;
+          }
+          
+          .sidebar {
+            width: calc(100% - 40px);
+            height: auto;
+            position: relative;
+            margin: 20px;
+            top: 0;
+            padding: 16px;
+          }
+          
+          .logo-container {
+            margin-bottom: 16px;
+          }
+          
+          .user-section {
+            margin-top: 16px;
+          }
+
+          .main-content {
+            padding: 20px;
+            height: auto;
+            overflow-y: visible;
+          }
+          
+          .cards-grid {
+            grid-template-columns: repeat(2, 1fr);
+            gap: 12px;
+          }
+          
+          .content-row {
+            flex-direction: column;
+            gap: 20px;
+          }
+          
+          .camera-section {
+            flex: none;
+            width: 100%;
+          }
+          
+          .right-panel {
+            flex: none;
+            width: 100%;
+          }
+        }
+        
+        @media (max-width: 600px) {
+          .cards-grid {
+            grid-template-columns: 1fr;
+          }
+          
+          .top-header {
+            flex-direction: column;
+            align-items: flex-start;
+            gap: 12px;
+            padding: 16px 20px;
+          }
+          
+          .page-title {
+            font-size: 20px;
+          }
+          
+          .metric-card {
+            padding: 16px;
+          }
+          
+          .card-value {
+            font-size: 24px;
+          }
+        }
       `}</style>
     </div>
   );
