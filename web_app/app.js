@@ -16,6 +16,7 @@ let alarmDelaySeconds = 0.8;
 let closedStartTime = null;
 let alertCount = 0;
 let earHistory = new Array(100).fill(0.35); // Seed history chart data
+let earHistoryList = []; // Rolling array of raw EAR values for dynamic adaptive thresholding
 
 // Web Audio API Synthetic Alarm state variables
 let audioCtx = null;
@@ -315,6 +316,14 @@ async function renderLoop() {
         txtEyeStatus.className = "card-val txt-red";
         closedStartTime = null;
         txtClosedDuration.innerText = "0.0s";
+        
+        // Hide alarm overlay and stop sounds immediately if face is lost
+        if (alarmOverlay.style.display === "flex") {
+          alarmOverlay.style.display = "none";
+        }
+        alarmAudio.pause();
+        alarmAudio.currentTime = 0;
+        stopSyntheticAlarm();
       }
     } catch (err) {
       console.error("Frame processing error:", err);
@@ -337,22 +346,24 @@ function distance2D(p1, p2) {
 }
 
 function calculateAverageEAR(landmarks) {
-  // MediaPipe FaceMesh indices:
-  // Left eye: Inner corner [133], Outer corner [33]
-  //           Top lids [160, 158], Bottom lids [153, 144]
-  const dLeftVertical1 = distance2D(landmarks[160], landmarks[153]);
-  const dLeftVertical2 = distance2D(landmarks[158], landmarks[144]);
+  // Left Eye Landmarks:
+  // Vertical center [159, 145], vertical left [160, 153], vertical right [158, 144]
+  // Horizontal corner-to-corner [33, 133]
+  const dLeftVertical1 = distance2D(landmarks[159], landmarks[145]);
+  const dLeftVertical2 = distance2D(landmarks[160], landmarks[153]);
+  const dLeftVertical3 = distance2D(landmarks[158], landmarks[144]);
   const dLeftHorizontal = distance2D(landmarks[33], landmarks[133]);
-  const leftEAR = (dLeftVertical1 + dLeftVertical2) / (2.0 * dLeftHorizontal);
+  const leftEAR = (dLeftVertical1 * 2.0 + dLeftVertical2 + dLeftVertical3) / (4.0 * dLeftHorizontal);
 
-  // Right eye: Inner corner [362], Outer corner [263]
-  //            Top lids [385, 387], Bottom lids [373, 380]
-  const dRightVertical1 = distance2D(landmarks[385], landmarks[373]);
-  const dRightVertical2 = distance2D(landmarks[387], landmarks[380]);
+  // Right Eye Landmarks:
+  // Vertical center [386, 374], vertical right [385, 373], vertical left [387, 380]
+  // Horizontal corner-to-corner [263, 362]
+  const dRightVertical1 = distance2D(landmarks[386], landmarks[374]);
+  const dRightVertical2 = distance2D(landmarks[385], landmarks[373]);
+  const dRightVertical3 = distance2D(landmarks[387], landmarks[380]);
   const dRightHorizontal = distance2D(landmarks[263], landmarks[362]);
-  const rightEAR = (dRightVertical1 + dRightVertical2) / (2.0 * dRightHorizontal);
+  const rightEAR = (dRightVertical1 * 2.0 + dRightVertical2 + dRightVertical3) / (4.0 * dRightHorizontal);
 
-  // Return the average of both eyes
   return (leftEAR + rightEAR) / 2.0;
 }
 
@@ -409,8 +420,29 @@ function stopSyntheticAlarm() {
   }
 }
 
-// ── 6. Drowsiness Evaluation & Warning state ────────────
+// ── 6. Drowsiness Evaluation & Warning state (AI-Powered Adaptive Dynamic Calibration) ──
 function evaluateDrowsiness(ear) {
+  // 1. Maintain sliding history of the last 150 frames of EAR (about 5-7 seconds)
+  earHistoryList.push(ear);
+  if (earHistoryList.length > 150) {
+    earHistoryList.shift();
+  }
+  
+  // 2. Compute 90th percentile to dynamically calibrate the stable "open eyes" EAR reference
+  const sorted = [...earHistoryList].sort((a, b) => a - b);
+  const openRefEAR = sorted.length > 20 
+    ? sorted[Math.floor(sorted.length * 0.90)] 
+    : 0.32; // safe initialization fallback
+    
+  // 3. Compute adaptive threshold dynamically (76% of open reference EAR)
+  // Clamp between 0.18 and 0.31 to prevent any anomalous extreme scaling
+  const adaptiveThreshold = Math.max(0.18, Math.min(0.31, openRefEAR * 0.76));
+  earThreshold = adaptiveThreshold;
+  
+  // 4. Update UI calibration sliders smoothly
+  rangeEarThreshold.value = adaptiveThreshold;
+  valEarThreshold.innerText = adaptiveThreshold.toFixed(2);
+  
   if (ear < earThreshold) {
     // Eyes closed
     txtEyeStatus.innerText = "CLOSED";
@@ -452,44 +484,134 @@ function evaluateDrowsiness(ear) {
   }
 }
 
-// ── 7. Draw Visual FaceMesh Eye Overlay ──────────────────
+// ── 7. Draw Visual FaceMesh Eye Overlay (Futuristic HUD Bounding Boxes) ──
 function drawTrackingMesh(landmarks, ear) {
-  canvasCtx.lineWidth = 1.5;
-  canvasCtx.strokeStyle = ear < earThreshold ? "rgb(239, 68, 68)" : "rgb(6, 182, 212)";
-  canvasCtx.fillStyle = ear < earThreshold ? "rgba(239, 68, 68, 0.25)" : "rgba(6, 182, 212, 0.15)";
-
-  // helper to draw a closed eye contour
-  function drawEyeContour(indices) {
-    canvasCtx.beginPath();
-    const firstPoint = landmarks[indices[0]];
-    canvasCtx.moveTo(firstPoint.x * canvasElement.width, firstPoint.y * canvasElement.height);
-    
-    for (let i = 1; i < indices.length; i++) {
-      const p = landmarks[indices[i]];
-      canvasCtx.lineTo(p.x * canvasElement.width, p.y * canvasElement.height);
+  // Left Eye Landmarks (indices from MediaPipe FaceMesh)
+  const leftEyeIndices = [33, 160, 158, 133, 153, 144];
+  // Right Eye Landmarks
+  const rightEyeIndices = [263, 385, 387, 362, 373, 380];
+  
+  function drawEyeBoundingBox(indices, eyeEAR, label) {
+    let minX = Infinity, maxX = -Infinity;
+    let minY = Infinity, maxY = -Infinity;
+    for (const idx of indices) {
+      const p = landmarks[idx];
+      if (p.x < minX) minX = p.x;
+      if (p.x > maxX) maxX = p.x;
+      if (p.y < minY) minY = p.y;
+      if (p.y > maxY) maxY = p.y;
     }
-    canvasCtx.closePath();
+    
+    const width = canvasElement.width;
+    const height = canvasElement.height;
+    
+    // Calculate coordinates in pixels
+    const pxMin = minX * width;
+    const pxMax = maxX * width;
+    const pxMinY = minY * height;
+    const pxMaxY = maxY * height;
+    
+    const eyeW = pxMax - pxMin;
+    const eyeH = pxMaxY - pxMinY;
+    
+    // Pad bounding box for stunning aesthetics
+    const padX = eyeW * 0.35;
+    const padY = eyeH * 0.45;
+    
+    const x = pxMin - padX;
+    const y = pxMinY - padY;
+    const w = eyeW + (padX * 2);
+    const h = eyeH + (padY * 2);
+    
+    const isOpen = eyeEAR >= earThreshold;
+    
+    // Selection of colors
+    const strokeColor = isOpen ? "rgb(34, 197, 94)" : "rgb(239, 68, 68)";
+    const fillColor = isOpen ? "rgba(34, 197, 94, 0.08)" : "rgba(239, 68, 68, 0.18)";
+    
+    canvasCtx.strokeStyle = strokeColor;
+    canvasCtx.fillStyle = fillColor;
+    canvasCtx.lineWidth = 2.0;
+    
+    // Draw rounded rect box
+    canvasCtx.beginPath();
+    if (canvasCtx.roundRect) {
+      canvasCtx.roundRect(x, y, w, h, 6);
+    } else {
+      canvasCtx.rect(x, y, w, h);
+    }
     canvasCtx.fill();
     canvasCtx.stroke();
-  }
-
-  // Left Eye Contour (indices ordered around outer loop)
-  const leftEyeIndices = [33, 160, 158, 133, 153, 144];
-  drawEyeContour(leftEyeIndices);
-
-  // Right Eye Contour
-  const rightEyeIndices = [263, 385, 387, 362, 373, 380];
-  drawEyeContour(rightEyeIndices);
-  
-  // Draw eye landmarker nodes
-  canvasCtx.fillStyle = "#ffffff";
-  const allIndices = [...leftEyeIndices, ...rightEyeIndices];
-  allIndices.forEach(idx => {
-    const p = landmarks[idx];
+    
+    // Draw modern industrial HUD corner brackets
+    const len = Math.min(w, h) * 0.22;
+    canvasCtx.lineWidth = 2.5;
+    canvasCtx.strokeStyle = isOpen ? "rgba(34, 197, 94, 0.7)" : "rgba(239, 68, 68, 0.7)";
+    
+    // Top-Left corner
     canvasCtx.beginPath();
-    canvasCtx.arc(p.x * canvasElement.width, p.y * canvasElement.height, 1.8, 0, 2 * Math.PI);
+    canvasCtx.moveTo(x, y + len);
+    canvasCtx.lineTo(x, y);
+    canvasCtx.lineTo(x + len, y);
+    canvasCtx.stroke();
+    
+    // Top-Right corner
+    canvasCtx.beginPath();
+    canvasCtx.moveTo(x + w, y + len);
+    canvasCtx.lineTo(x + w, y);
+    canvasCtx.lineTo(x + w - len, y);
+    canvasCtx.stroke();
+    
+    // Bottom-Left corner
+    canvasCtx.beginPath();
+    canvasCtx.moveTo(x, y + h - len);
+    canvasCtx.lineTo(x, y + h);
+    canvasCtx.lineTo(x + len, y + h);
+    canvasCtx.stroke();
+    
+    // Bottom-Right corner
+    canvasCtx.beginPath();
+    canvasCtx.moveTo(x + w, y + h - len);
+    canvasCtx.lineTo(x + w, y + h);
+    canvasCtx.lineTo(x + w - len, y + h);
+    canvasCtx.stroke();
+    
+    // Reset line width
+    canvasCtx.lineWidth = 2.0;
+
+    // Draw solid label badge above box
+    canvasCtx.fillStyle = strokeColor;
+    const tagText = `${label}: ${(eyeEAR * 100).toFixed(0)}% [${isOpen ? "OPEN" : "CLOSED"}]`;
+    canvasCtx.font = "bold 9px 'JetBrains Mono', 'Fira Code', monospace, sans-serif";
+    const textWidth = canvasCtx.measureText(tagText).width;
+    
+    canvasCtx.beginPath();
+    if (canvasCtx.roundRect) {
+      canvasCtx.roundRect(x, y - 15, textWidth + 10, 13, [3, 3, 0, 0]);
+    } else {
+      canvasCtx.rect(x, y - 15, textWidth + 10, 13);
+    }
     canvasCtx.fill();
-  });
+    
+    // Text rendering inside solid badge
+    canvasCtx.fillStyle = "#ffffff";
+    canvasCtx.fillText(tagText, x + 5, y - 5);
+  }
+  
+  // Calculate distances for left and right eyes
+  const dLeftVertical1 = distance2D(landmarks[160], landmarks[153]);
+  const dLeftVertical2 = distance2D(landmarks[158], landmarks[144]);
+  const dLeftHorizontal = distance2D(landmarks[33], landmarks[133]);
+  const leftEAR = (dLeftVertical1 + dLeftVertical2) / (2.0 * dLeftHorizontal);
+
+  const dRightVertical1 = distance2D(landmarks[385], landmarks[373]);
+  const dRightVertical2 = distance2D(landmarks[387], landmarks[380]);
+  const dRightHorizontal = distance2D(landmarks[263], landmarks[362]);
+  const rightEAR = (dRightVertical1 + dRightVertical2) / (2.0 * dRightHorizontal);
+  
+  // Render Left and Right Bounding Boxes
+  drawEyeBoundingBox(leftEyeIndices, leftEAR, "L_EYE");
+  drawEyeBoundingBox(rightEyeIndices, rightEAR, "R_EYE");
 }
 
 // ── 8. Draw Custom Canvas Line Graph ─────────────────────

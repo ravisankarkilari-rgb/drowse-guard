@@ -16,7 +16,7 @@ export default function Dashboard() {
   });
   const navigate = useNavigate();
 
-  const [mode, setMode] = useState("backend"); // "backend" or "local"
+  const [mode, setMode] = useState("local"); // "backend" or "local"
   const API_URL = process.env.REACT_APP_API_URL || "http://localhost:8000";
 
   // Edge AI refs
@@ -47,6 +47,10 @@ export default function Dashboard() {
   // Stable time-based tracking refs
   const closedStartTimeRef = useRef(null);
   const graceStartTimeRef = useRef(null);
+
+  // Rolling eye calibration references for real-time adaptive dynamic thresholding
+  const earHistoryListRef = useRef([]);
+  const adaptiveThresholdRef = useRef(0.25);
 
   // Hardware-native Web Audio API Alarm refs
   const audioCtxRef = useRef(null);
@@ -347,10 +351,15 @@ export default function Dashboard() {
           // Drowsiness state machine
           evaluateDrowsiness(ear);
         } else {
+          closedStartTimeRef.current = null;
+          graceStartTimeRef.current = null;
           setStatus(prev => ({
             ...prev,
             eye_status: "no face detected",
-            closed_frames: 0
+            closed_frames: 0,
+            closed_duration: 0,
+            drowsy: false,
+            alarm: false
           }));
         }
       } catch (err) {
@@ -368,28 +377,62 @@ export default function Dashboard() {
     );
   }
 
+  // Highly robust 3-point vertical eye aspect ratio calculation
   function calculateAverageEAR(landmarks) {
-    const dLeftVertical1 = distance2D(landmarks[160], landmarks[153]);
-    const dLeftVertical2 = distance2D(landmarks[158], landmarks[144]);
+    // Left Eye Landmarks:
+    // Vertical center [159, 145], vertical left [160, 153], vertical right [158, 144]
+    // Horizontal corner-to-corner [33, 133]
+    const dLeftVertical1 = distance2D(landmarks[159], landmarks[145]);
+    const dLeftVertical2 = distance2D(landmarks[160], landmarks[153]);
+    const dLeftVertical3 = distance2D(landmarks[158], landmarks[144]);
     const dLeftHorizontal = distance2D(landmarks[33], landmarks[133]);
-    const leftEAR = (dLeftVertical1 + dLeftVertical2) / (2.0 * dLeftHorizontal);
+    const leftEAR = (dLeftVertical1 * 2.0 + dLeftVertical2 + dLeftVertical3) / (4.0 * dLeftHorizontal);
 
-    const dRightVertical1 = distance2D(landmarks[385], landmarks[373]);
-    const dRightVertical2 = distance2D(landmarks[387], landmarks[380]);
+    // Right Eye Landmarks:
+    // Vertical center [386, 374], vertical right [385, 373], vertical left [387, 380]
+    // Horizontal corner-to-corner [263, 362]
+    const dRightVertical1 = distance2D(landmarks[386], landmarks[374]);
+    const dRightVertical2 = distance2D(landmarks[385], landmarks[373]);
+    const dRightVertical3 = distance2D(landmarks[387], landmarks[380]);
     const dRightHorizontal = distance2D(landmarks[263], landmarks[362]);
-    const rightEAR = (dRightVertical1 + dRightVertical2) / (2.0 * dRightHorizontal);
+    const rightEAR = (dRightVertical1 * 2.0 + dRightVertical2 + dRightVertical3) / (4.0 * dRightHorizontal);
 
     return (leftEAR + rightEAR) / 2.0;
   }
 
-  // Drowsiness local state machine
+  // Drowsiness local state machine with real-time AI-powered adaptive thresholding
   const evaluateDrowsiness = (ear) => {
-    const currentThreshold = earThresholdRef.current;
-    const currentSensitivity = sensitivityRef.current;
-    const isClosed = ear < currentThreshold;
-    const alarmDelaySeconds = currentSensitivity / 20.0; // translate frames to stable duration seconds (e.g. 20 frames = 1.0s)
+    // 1. Maintain sliding history of the last 150 frames of EAR (about 5-7 seconds)
+    earHistoryListRef.current.push(ear);
+    if (earHistoryListRef.current.length > 150) {
+      earHistoryListRef.current.shift();
+    }
     
+    // 2. Compute 90th percentile to dynamically calibrate the stable "open eyes" EAR reference
+    const sorted = [...earHistoryListRef.current].sort((a, b) => a - b);
+    const openRefEAR = sorted.length > 20 
+      ? sorted[Math.floor(sorted.length * 0.90)] 
+      : 0.32; // safe initialization fallback
+      
+    // 3. Compute adaptive threshold dynamically (76% of open reference EAR)
+    // Clamp between 0.18 and 0.31 to prevent any anomalous extreme scaling
+    const adaptiveThreshold = Math.max(0.18, Math.min(0.31, openRefEAR * 0.76));
+    adaptiveThresholdRef.current = adaptiveThreshold;
+    
+    // 4. Safely sync to React state for UI slider readout smoothly once every 30 frames
+    // (to prevent rapid 60fps re-renders which severely degrade video performance)
     setStatus(prev => {
+      if (prev.frame_count % 30 === 0) {
+        setTimeout(() => {
+          setEarThreshold(adaptiveThreshold);
+        }, 0);
+      }
+      
+      const currentThreshold = adaptiveThreshold;
+      const currentSensitivity = sensitivityRef.current;
+      const isClosed = ear < currentThreshold;
+      const alarmDelaySeconds = currentSensitivity / 20.0;
+      
       let nextClosedStartTime = prev.closed_duration > 0 ? closedStartTimeRef.current : null;
       let nextClosedDuration = 0;
 
@@ -401,17 +444,15 @@ export default function Dashboard() {
         nextClosedDuration = (Date.now() - closedStartTimeRef.current) / 1000.0;
         graceStartTimeRef.current = null; // clear grace timer
       } else {
-        // Implement a 300ms flicker grace period before resetting timer
+        // Implement 300ms flicker grace period
         if (closedStartTimeRef.current !== null) {
           if (graceStartTimeRef.current === null) {
             graceStartTimeRef.current = Date.now();
           }
           const graceElapsed = Date.now() - graceStartTimeRef.current;
           if (graceElapsed < 300) {
-            // retain closed state during grace period
             nextClosedDuration = (Date.now() - closedStartTimeRef.current) / 1000.0;
           } else {
-            // grace period expired, reset closed state
             closedStartTimeRef.current = null;
             graceStartTimeRef.current = null;
             nextClosedDuration = 0;
@@ -444,39 +485,131 @@ export default function Dashboard() {
     });
   };
 
-  // Draw eye meshes overlays
+  // Draw high-tech visual HUD eye bounding boxes overlays
   function drawEyeMesh(ctx, landmarks, ear, width, height) {
-    const currentThreshold = earThresholdRef.current;
-    ctx.lineWidth = 1.5;
-    ctx.strokeStyle = ear < currentThreshold ? "rgb(239, 68, 68)" : "rgb(6, 182, 212)";
-    ctx.fillStyle = ear < currentThreshold ? "rgba(239, 68, 68, 0.25)" : "rgba(6, 182, 212, 0.15)";
-
-    function drawContour(indices) {
-      ctx.beginPath();
-      const first = landmarks[indices[0]];
-      ctx.moveTo(first.x * width, first.y * height);
-      for (let i = 1; i < indices.length; i++) {
-        const p = landmarks[indices[i]];
-        ctx.lineTo(p.x * width, p.y * height);
+    const currentThreshold = adaptiveThresholdRef.current;
+    
+    // Left Eye Landmarks (indices from MediaPipe FaceMesh)
+    const leftEyeIndices = [33, 160, 158, 133, 153, 144];
+    // Right Eye Landmarks
+    const rightEyeIndices = [263, 385, 387, 362, 373, 380];
+    
+    function drawEyeBoundingBox(indices, eyeEAR, label) {
+      let minX = Infinity, maxX = -Infinity;
+      let minY = Infinity, maxY = -Infinity;
+      for (const idx of indices) {
+        const p = landmarks[idx];
+        if (p.x < minX) minX = p.x;
+        if (p.x > maxX) maxX = p.x;
+        if (p.y < minY) minY = p.y;
+        if (p.y > maxY) maxY = p.y;
       }
-      ctx.closePath();
+      
+      // Calculate coordinates in pixels
+      const pxMin = minX * width;
+      const pxMax = maxX * width;
+      const pxMinY = minY * height;
+      const pxMaxY = maxY * height;
+      
+      const eyeW = pxMax - pxMin;
+      const eyeH = pxMaxY - pxMinY;
+      
+      // Add padding around eye area for aesthetics
+      const padX = eyeW * 0.35;
+      const padY = eyeH * 0.45;
+      
+      const x = pxMin - padX;
+      const y = pxMinY - padY;
+      const w = eyeW + (padX * 2);
+      const h = eyeH + (padY * 2);
+      
+      const isOpen = eyeEAR >= currentThreshold;
+      
+      // Futuristic HUD styling colors
+      const strokeColor = isOpen ? "rgb(34, 197, 94)" : "rgb(239, 68, 68)"; // Cyber green vs Warning red
+      const fillColor = isOpen ? "rgba(34, 197, 94, 0.08)" : "rgba(239, 68, 68, 0.18)";
+      
+      ctx.strokeStyle = strokeColor;
+      ctx.fillStyle = fillColor;
+      ctx.lineWidth = 2.0;
+      
+      // Draw rectangular box
+      ctx.beginPath();
+      if (ctx.roundRect) {
+        ctx.roundRect(x, y, w, h, 6);
+      } else {
+        ctx.rect(x, y, w, h);
+      }
       ctx.fill();
       ctx.stroke();
-    }
-
-    const leftEye = [33, 160, 158, 133, 153, 144];
-    const rightEye = [263, 385, 387, 362, 373, 380];
-
-    drawContour(leftEye);
-    drawContour(rightEye);
-    
-    ctx.fillStyle = "#ffffff";
-    [...leftEye, ...rightEye].forEach(idx => {
-      const p = landmarks[idx];
+      
+      // Draw premium HUD corner brackets for extra visual excellence
+      const len = Math.min(w, h) * 0.22;
+      ctx.lineWidth = 2.5;
+      ctx.strokeStyle = isOpen ? "rgba(34, 197, 94, 0.7)" : "rgba(239, 68, 68, 0.7)";
+      
+      // Top-Left corner
       ctx.beginPath();
-      ctx.arc(p.x * width, p.y * height, 1.5, 0, 2 * Math.PI);
+      ctx.moveTo(x, y + len);
+      ctx.lineTo(x, y);
+      ctx.lineTo(x + len, y);
+      ctx.stroke();
+      
+      // Top-Right corner
+      ctx.beginPath();
+      ctx.moveTo(x + w, y + len);
+      ctx.lineTo(x + w, y);
+      ctx.lineTo(x + w - len, y);
+      ctx.stroke();
+      
+      // Bottom-Left corner
+      ctx.beginPath();
+      ctx.moveTo(x, y + h - len);
+      ctx.lineTo(x, y + h);
+      ctx.lineTo(x + len, y + h);
+      ctx.stroke();
+      
+      // Bottom-Right corner
+      ctx.beginPath();
+      ctx.moveTo(x + w, y + h - len);
+      ctx.lineTo(x + w, y + h);
+      ctx.lineTo(x + w - len, y + h);
+      ctx.stroke();
+      
+      // Draw modern HUD solid status label tag above bounding box
+      ctx.fillStyle = strokeColor;
+      const tagText = `${label}: ${(eyeEAR * 100).toFixed(0)}% [${isOpen ? "OPEN" : "CLOSED"}]`;
+      ctx.font = "bold 9px 'JetBrains Mono', 'Fira Code', monospace, sans-serif";
+      const textWidth = ctx.measureText(tagText).width;
+      
+      ctx.beginPath();
+      if (ctx.roundRect) {
+        ctx.roundRect(x, y - 15, textWidth + 10, 13, [3, 3, 0, 0]);
+      } else {
+        ctx.rect(x, y - 15, textWidth + 10, 13);
+      }
       ctx.fill();
-    });
+      
+      // Draw tag white text
+      ctx.fillStyle = "#ffffff";
+      ctx.fillText(tagText, x + 5, y - 5);
+    }
+    
+    // Left eye EAR
+    const dLeftVertical1 = distance2D(landmarks[160], landmarks[153]);
+    const dLeftVertical2 = distance2D(landmarks[158], landmarks[144]);
+    const dLeftHorizontal = distance2D(landmarks[33], landmarks[133]);
+    const leftEAR = (dLeftVertical1 + dLeftVertical2) / (2.0 * dLeftHorizontal);
+
+    // Right eye EAR
+    const dRightVertical1 = distance2D(landmarks[385], landmarks[373]);
+    const dRightVertical2 = distance2D(landmarks[387], landmarks[380]);
+    const dRightHorizontal = distance2D(landmarks[263], landmarks[362]);
+    const rightEAR = (dRightVertical1 + dRightVertical2) / (2.0 * dRightHorizontal);
+    
+    // Draw left and right HUD boxes
+    drawEyeBoundingBox(leftEyeIndices, leftEAR, "L_EYE");
+    drawEyeBoundingBox(rightEyeIndices, rightEAR, "R_EYE");
   }
 
   const handleLogout = async () => {
@@ -566,15 +699,21 @@ export default function Dashboard() {
             <div className="card-subtext">Live EAR: {status.live_ear ? status.live_ear.toFixed(2) : "0.00"}</div>
           </div>
           
-          <div className={`metric-card alert-card ${status.alarm ? 'alarm-active' : ''}`}>
+          <div className={`metric-card alert-card ${status.alarm ? 'alarm-active' : status.drowsy ? 'warning-active' : ''}`} style={{ borderBottom: status.alarm ? '3px solid var(--accent-danger)' : status.drowsy ? '3px solid var(--accent-warning)' : '3px solid var(--accent-success)' }}>
             <div className="card-header">
               <div className="card-label">Alert Status</div>
               <div className="card-icon">⚠️</div>
             </div>
-            <div className={`card-value ${status.alarm ? "danger-text" : "success-text"}`}>
-              {status.alarm ? "ALARM" : "SAFE"}
+            <div className={`card-value ${status.alarm ? "danger-text" : status.drowsy ? "warning-text" : "success-text"}`}>
+              {status.alarm ? "ALARM" : status.drowsy ? "DROWSY" : "SAFE"}
             </div>
-            <div className="card-subtext">{status.alarm ? "Wake up driver immediately" : "Driver is alert"}</div>
+            <div className="card-subtext">
+              {status.alarm 
+                ? "Wake up driver immediately" 
+                : status.drowsy 
+                  ? "Warning: Driver showing signs of drowsiness" 
+                  : "Driver is alert and safe"}
+            </div>
           </div>
           
           <div className="metric-card total-card">
@@ -603,13 +742,19 @@ export default function Dashboard() {
               </button>
             </div>
             
-            {status.alarm && (
+            {status.alarm ? (
               <div className="alarm-banner">
                 <span className="alarm-icon">🚨</span> 
                 DROWSINESS DETECTED — WAKE UP! 
                 <span className="alarm-icon">🚨</span>
               </div>
-            )}
+            ) : status.drowsy ? (
+              <div className="alarm-banner warning-banner" style={{ background: "linear-gradient(90deg, #b45309, #d97706, #b45309)" }}>
+                <span className="alarm-icon">⚠️</span> 
+                WARNING: DROWSINESS DETECTED
+                <span className="alarm-icon">⚠️</span>
+              </div>
+            ) : null}
             
             <div className="video-container">
               {active ? (
