@@ -309,24 +309,23 @@ export default function Dashboard() {
     animationRef.current = requestAnimationFrame(detectFrame);
   };
 
-  // Mathematical EAR helper formulas
-  function distance3D(p1, p2) {
+  // Mathematical 2D EAR helper formulas
+  function distance2D(p1, p2) {
     return Math.sqrt(
       Math.pow(p1.x - p2.x, 2) +
-      Math.pow(p1.y - p2.y, 2) +
-      Math.pow(p1.z - p2.z, 2)
+      Math.pow(p1.y - p2.y, 2)
     );
   }
 
   function calculateAverageEAR(landmarks) {
-    const dLeftVertical1 = distance3D(landmarks[160], landmarks[153]);
-    const dLeftVertical2 = distance3D(landmarks[158], landmarks[144]);
-    const dLeftHorizontal = distance3D(landmarks[33], landmarks[133]);
+    const dLeftVertical1 = distance2D(landmarks[160], landmarks[153]);
+    const dLeftVertical2 = distance2D(landmarks[158], landmarks[144]);
+    const dLeftHorizontal = distance2D(landmarks[33], landmarks[133]);
     const leftEAR = (dLeftVertical1 + dLeftVertical2) / (2.0 * dLeftHorizontal);
 
-    const dRightVertical1 = distance3D(landmarks[385], landmarks[373]);
-    const dRightVertical2 = distance3D(landmarks[387], landmarks[380]);
-    const dRightHorizontal = distance3D(landmarks[263], landmarks[362]);
+    const dRightVertical1 = distance2D(landmarks[385], landmarks[373]);
+    const dRightVertical2 = distance2D(landmarks[387], landmarks[380]);
+    const dRightHorizontal = distance2D(landmarks[263], landmarks[362]);
     const rightEAR = (dRightVertical1 + dRightVertical2) / (2.0 * dRightHorizontal);
 
     return (leftEAR + rightEAR) / 2.0;
