@@ -1,3 +1,4 @@
+<img width="1919" height="1100" alt="image" src="https://github.com/user-attachments/assets/df525d33-dd3f-4f9e-a4ec-fd04f7aafd96" />
 # 👁️ DrowseGuard — Advanced Driver Drowsiness Detection System
 
 DrowseGuard is a premium, multi-tiered driver safety solution featuring real-time eye-status monitoring, edge AI computer vision tracking, an interactive visual HUD dashboard, active safety alarms, and adaptive user calibration. 
